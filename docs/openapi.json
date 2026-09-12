@@ -1,0 +1,28 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Thaisausage ERP Integration API", "version": "1.0.0", "description": "API สำหรับ ERP แจ้ง event, ส่ง/กวาด SO และรับ DO แบบ staging"},
+  "servers": [{"url": "https://thaisausage.krs.co.th", "description": "Production VPS"}],
+  "security": [{"bearerAuth": []}],
+  "paths": {
+    "/health": {"get": {"security": [], "summary": "ตรวจสถานะ service", "responses": {"200": {"description": "Service is running"}}}},
+    "/openapi.json": {"get": {"security": [], "summary": "OpenAPI specification", "responses": {"200": {"description": "OpenAPI JSON"}}}},
+    "/docs": {"get": {"security": [], "summary": "เปิด Swagger UI", "responses": {"200": {"description": "Swagger UI"}}}},
+    "/api/v1/erp/hooks/order-ready": {"post": {"summary": "รับ ERP webhook เพื่อปลุก SQL sweep", "description": "รับ event เท่านั้น ระบบจะอ่าน SO ฉบับเต็มจาก SQL Server ภายหลัง", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErpHook"}}}}, "responses": {"202": {"description": "รับ event และ queue sweep แล้ว"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/ValidationError"}}}},
+    "/api/v1/erp/orders": {"post": {"summary": "รับ SO จาก ERP", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OrderRequest"}}}}, "responses": {"200": {"description": "Validated or sent"}, "202": {"description": "ต้องตรวจสอบ upstream"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "409": {"$ref": "#/components/responses/Conflict"}, "422": {"$ref": "#/components/responses/ValidationError"}}}},
+    "/api/v1/erp/pull": {"post": {"summary": "กวาด SO จาก ERP connector", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PullRequest"}}}}, "responses": {"200": {"description": "Pull result"}, "202": {"description": "ต้องตรวจสอบ upstream"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/ValidationError"}, "502": {"description": "ERP unavailable"}}}},
+    "/api/v1/erp/do-received": {"post": {"summary": "รับ DO เข้า staging", "description": "เก็บ payload เพื่อสำรวจเท่านั้น ไม่เขียนกลับ ERP", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DoReceipt"}}}}, "responses": {"202": {"description": "Staged"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "409": {"$ref": "#/components/responses/Conflict"}, "422": {"$ref": "#/components/responses/ValidationError"}}}},
+    "/api/v1/submissions/{request_id}": {"get": {"summary": "ดูสถานะ submission", "parameters": [{"name": "request_id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Submission status"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "404": {"description": "Not found"}}}}
+  },
+  "components": {
+    "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "API key"}},
+    "responses": {"Unauthorized": {"description": "Invalid or missing API key"}, "Conflict": {"description": "Duplicate identity with different data"}, "ValidationError": {"description": "Invalid JSON or business fields"}},
+    "schemas": {
+      "ErpHook": {"type": "object", "required": ["event_id", "event_type", "source_id"], "properties": {"event_id": {"type": "string", "maxLength": 120, "example": "ERP-EVENT-0001"}, "event_type": {"type": "string", "enum": ["sales_order.ready", "sales_order.changed"]}, "source_id": {"type": "string"}, "company_id": {"type": "string"}, "order_no": {"type": "string"}, "changed_at": {"type": "string", "format": "date-time"}}},
+      "OrderRequest": {"type": "object", "required": ["request_id", "orders"], "properties": {"request_id": {"type": "string", "maxLength": 120}, "orders": {"type": "array", "items": {"$ref": "#/components/schemas/Order"}}}},
+      "Order": {"type": "object", "required": ["order_no", "order_date", "customer", "pickup_hub_code", "items"], "properties": {"order_no": {"type": "string"}, "order_date": {"type": "string", "format": "date"}, "delivery_date": {"type": ["string", "null"], "format": "date"}, "payment_in_day": {"type": ["number", "null"], "description": "0 = COD"}, "customer": {"type": "object", "required": ["code"], "properties": {"code": {"type": "string"}, "name": {"type": "string"}}}, "delivery_point_code": {"type": "string"}, "shipping_address": {"type": "string"}, "pickup_hub_code": {"type": "string"}, "items": {"type": "array", "items": {"$ref": "#/components/schemas/OrderItem"}}}},
+      "OrderItem": {"type": "object", "required": ["item_code", "quantity", "unit_price"], "properties": {"line_no": {"type": "integer"}, "item_code": {"type": "string"}, "description": {"type": "string"}, "quantity": {"type": "number", "exclusiveMinimum": 0}, "unit_price": {"type": "number", "minimum": 0}}},
+      "PullRequest": {"type": "object", "required": ["request_id"], "properties": {"request_id": {"type": "string"}, "query": {"type": "object", "additionalProperties": {"type": ["string", "number", "boolean"]}}}},
+      "DoReceipt": {"type": "object", "required": ["receipt_id"], "properties": {"receipt_id": {"type": "string"}, "do_no": {"type": "string"}, "status": {"type": "string"}, "data": {"type": "object", "additionalProperties": true}}}
+    }
+  }
+}

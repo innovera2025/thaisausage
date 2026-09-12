@@ -1,6 +1,7 @@
 import hmac
 import json
 import os
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
@@ -11,6 +12,7 @@ from .service import Conflict
 
 def create_server(config, service):
     key = os.environ[config["api_key_env"]]
+    openapi_path = Path(__file__).resolve().parent.parent / "docs" / "openapi.json"
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -57,6 +59,21 @@ def create_server(config, service):
             path = urlsplit(self.path).path
             if path == "/health":
                 return self.reply(200, {"status": "ok", "dry_run": config["dry_run"]})
+            if path == "/openapi.json":
+                try:
+                    self.reply(200, json.loads(openapi_path.read_text(encoding="utf-8")))
+                except (OSError, ValueError):
+                    self.reply(500, {"error": "openapi_unavailable"})
+                return
+            if path == "/docs":
+                html = b"<!doctype html><html><head><title>Thaisausage API</title><link rel=\"stylesheet\" href=\"https://unpkg.com/swagger-ui-dist@5/swagger-ui.css\"></head><body><div id=\"swagger-ui\"></div><script src=\"https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js\"></script><script>SwaggerUIBundle({url:'/openapi.json',dom_id:'#swagger-ui'})</script></body></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(html)))
+                self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://unpkg.com; connect-src 'self'")
+                self.end_headers()
+                self.wfile.write(html)
+                return
             if not self.authenticated():
                 return
             if path.startswith("/api/v1/submissions/"):

@@ -214,9 +214,15 @@ class IntegrationTests(unittest.TestCase):
             except HTTPError as error:
                 response = error
             with response:
-                return response.status, json.load(response)
+                body = response.read()
+                try:
+                    return response.status, json.loads(body)
+                except json.JSONDecodeError:
+                    return response.status, body.decode()
 
         self.assertEqual(call("/health", authorized=False)[0], 200)
+        self.assertEqual(call("/openapi.json", authorized=False)[1]["openapi"], "3.0.3")
+        self.assertEqual(call("/docs", authorized=False)[0], 200)
         self.assertEqual(call("/api/v1/erp/orders", self.payload, False)[0], 401)
         self.assertEqual(call("/api/v1/erp/orders", {"orders": []})[0], 422)
         self.assertEqual(call("/api/v1/erp/orders", self.payload)[1]["state"], "sent")

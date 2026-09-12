@@ -15,6 +15,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY thaisausage ./thaisausage
 COPY config/example.json ./config/example.json
+COPY docs/openapi.json ./docs/openapi.json
 
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /app/data \

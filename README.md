@@ -101,6 +101,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/pull \
 | Method / path | ข้อมูลเข้า / ผลลัพธ์ |
 |---|---|
 | `GET /health` | สถานะ process และ dry_run; ไม่ตรวจการเชื่อมต่อ ERP/eVRP |
+| `GET /docs` | Swagger UI สำหรับดูและทดลอง API |
+| `GET /openapi.json` | OpenAPI 3.0 specification |
 | `POST /api/v1/erp/orders` | `{request_id, orders: [...]}` รูปแบบใน `examples/erp-order.json` |
 | `POST /api/v1/erp/pull` | `{request_id, query?: {...}}` ดึง ERP → map → ส่ง |
 | `POST /api/v1/erp/hooks/order-ready` | ERP แจ้ง event เพื่อปลุก SQL sweep; ไม่ใช่ข้อมูล SO เต็ม |
