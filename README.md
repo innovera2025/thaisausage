@@ -104,6 +104,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/pull \
 | `POST /api/v1/erp/orders` | `{request_id, orders: [...]}` รูปแบบใน `examples/erp-order.json` |
 | `POST /api/v1/erp/pull` | `{request_id, query?: {...}}` ดึง ERP → map → ส่ง |
 | `POST /api/v1/erp/hooks/order-ready` | ERP แจ้ง event เพื่อปลุก SQL sweep; ไม่ใช่ข้อมูล SO เต็ม |
+| `POST /api/v1/erp/do-received` | รับ DO เข้า staging เพื่อตรวจสอบ; ไม่เขียนกลับ ERP |
 | `GET /api/v1/submissions/{request_id}` | สถานะที่บันทึกของการส่งจริง |
 
 ผลลัพธ์หลัก: `{request_id, state, dry_run}` และ `replayed: true` เมื่อเป็น request เดิม
@@ -151,6 +152,23 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/hooks/order-ready \
 ไม่ควรส่งจำนวนเงินหรือรายการสินค้าไว้ใน hook เพื่อป้องกันข้อมูลไม่ตรงกับฐาน ERP
 ใน foundation ปัจจุบัน hook ถูกเก็บใน SQLite ก่อน; SQL sweep worker จะ implement ใน Phase 04
 ดังนั้น endpoint นี้ยังไม่ทำให้ eVRP รับ SO ทันทีจนกว่า SQL connector/worker จะเปิดใช้งาน
+
+## Deploy บน VPS
+
+เตรียมไฟล์ config บน VPS ก่อน โดยไม่ copy `.env` เข้า Git:
+
+```sh
+cp config/example.json config/local.json
+# แก้ source/sqlserver/sync และ SQL query ที่ได้รับการอนุมัติ
+docker compose -f deploy/docker-compose.yml build
+docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml logs --tail=100 thaisausage
+```
+
+Compose bind port ไว้ที่ localhost และใช้ volume สำหรับ SQLite; ให้ reverse proxy ที่มี TLS
+เป็นผู้รับ traffic จาก ERP และส่งต่อเข้า `127.0.0.1:8080`
+ตั้ง `sync.enabled=true` หลัง dry-run และ read-only SO verification ผ่านเท่านั้น
+ก่อน `docker compose up` ต้องตรวจ `config/local.json`, `.env` permission และ firewall
 
 ## ทดสอบและแผน
 

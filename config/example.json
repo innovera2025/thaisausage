@@ -20,7 +20,11 @@
     "connect_timeout_seconds": 10,
     "query_timeout_seconds": 30,
     "approved_objects": [],
-    "approved_query_set": "pending_phase_01_discovery"
+    "approved_query_set": "pending_phase_01_discovery",
+    "orders_query": "",
+    "order_key": "order_no",
+    "field_map": {},
+    "item_field_map": {}
   },
   "vrp": {
     "base_url": "https://vrp.oneplatformth.com/api",
@@ -58,5 +62,9 @@
       "quantity": "quantity",
       "unit_price": "unit_price"
     }
+  }
+  ,"sync": {
+    "enabled": false,
+    "interval_seconds": 60
   }
 }

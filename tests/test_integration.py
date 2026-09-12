@@ -148,6 +148,26 @@ class IntegrationTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             self.service.record_erp_hook({"event_id": "E-1", "event_type": "invoice.paid", "source_id": "erp"})
 
+    def test_do_is_staged_without_erp_write(self):
+        result = self.service.receive_do({"receipt_id": "DO-1", "do_no": "DO-1", "status": "delivered"})
+        self.assertEqual(result, {"receipt_id": "DO-1", "state": "staged", "erp_write": False})
+        replay = self.service.receive_do({"receipt_id": "DO-1", "do_no": "DO-1", "status": "delivered"})
+        self.assertTrue(replay["replayed"])
+        with sqlite3.connect(self.database) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM do_receipts").fetchone()[0], 1)
+
+    def test_hook_sweep_reads_then_uses_single_submission_pipeline(self):
+        self.service.record_erp_hook({"event_id": "E-SWEEP", "event_type": "sales_order.ready",
+                                      "source_id": "main-erp", "order_no": "SO-1"})
+        sqlserver = Mock()
+        sqlserver.fetch_orders.return_value = self.payload["orders"]
+        result = self.service.sweep_hooks(sqlserver)
+        self.assertEqual(result[0]["state"], "sent")
+        sqlserver.fetch_orders.assert_called_once_with("SO-1")
+        self.vrp.send.assert_called_once()
+        with sqlite3.connect(self.database) as db:
+            self.assertEqual(db.execute("SELECT state FROM erp_hooks WHERE event_id='E-SWEEP'").fetchone()[0], "sent")
+
     def test_erp_mapping_nested_fields(self):
         config = self.config["erp"]
         config.update(field_map={"order_no": "so.number", "customer.code": "buyer.id"},

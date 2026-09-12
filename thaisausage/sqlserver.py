@@ -86,6 +86,41 @@ class SQLServerConnector:
         columns = [column[0] for column in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
+    def fetch_orders(self, order_no=None):
+        """Fetch approved SO rows; query text must be supplied by the ERP/DBA contract."""
+        sql = self.config.get("orders_query")
+        if not sql:
+            raise ContractError("Configure sqlserver.orders_query after schema discovery")
+        connection = self.connect()
+        try:
+            parameters = (order_no,) if "?" in sql and order_no else ()
+            rows = self.select_approved(connection, sql, parameters)
+        finally:
+            connection.close()
+        return self._group_rows(rows)
+
+    def _group_rows(self, rows):
+        order_key = self.config.get("order_key", "order_no")
+        if not rows:
+            return []
+        groups = {}
+        for row in rows:
+            key = row.get(order_key)
+            if not key:
+                raise ContractError("SQL result is missing the configured order_key")
+            groups.setdefault(key, []).append(row)
+        result = []
+        for key, group in groups.items():
+            order = mapped(group[0], self.config.get("field_map", {}))
+            items = []
+            for row in group:
+                item = mapped(row, self.config.get("item_field_map", {}))
+                if item.get("item_code") is not None:
+                    items.append(item)
+            order["items"] = items
+            result.append(order)
+        return result
+
 
 def approved_identifier(value):
     if not isinstance(value, str) or not value or any(not _IDENTIFIER.fullmatch(part) for part in value.split(".")):

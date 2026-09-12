@@ -34,6 +34,10 @@ class IntegrationService:
                     order_no TEXT, changed_at TEXT, state TEXT NOT NULL,
                     received_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS do_receipts (
+                    receipt_id TEXT PRIMARY KEY, do_no TEXT, payload_hash TEXT NOT NULL,
+                    payload TEXT NOT NULL, state TEXT NOT NULL, received_at TEXT NOT NULL
+                );
             """)
         finally:
             db.close()
@@ -72,6 +76,57 @@ class IntegrationService:
                 return {"event_id": hook["event_id"], "state": "received", "sweep": "queued"}
         finally:
             db.close()
+
+    def receive_do(self, payload):
+        """Stage a DO payload for inspection; this method never writes to ERP."""
+        from .contracts import require, text
+        require(isinstance(payload, dict), "DO body must be an object")
+        receipt_id = payload.get("receipt_id") or payload.get("do_no")
+        require(text(receipt_id) and len(receipt_id) <= 120, "receipt_id or do_no is required")
+        do_no = payload.get("do_no")
+        require(do_no is None or text(do_no), "do_no must be a non-empty string when supplied")
+        digest = hashlib.sha256(canonical(payload).encode()).hexdigest()
+        db = self.connect()
+        try:
+            with db:
+                row = db.execute("SELECT payload_hash,state FROM do_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+                if row:
+                    if row[0] != digest:
+                        raise Conflict("receipt_id already used with different data")
+                    return {"receipt_id": receipt_id, "state": row[1], "replayed": True}
+                db.execute("INSERT INTO do_receipts VALUES (?,?,?,?,?,?)",
+                           (receipt_id, do_no, digest, canonical(payload), "staged", datetime.now(timezone.utc).isoformat()))
+                return {"receipt_id": receipt_id, "state": "staged", "erp_write": False}
+        finally:
+            db.close()
+
+    def sweep_hooks(self, sqlserver):
+        """Read queued hook keys from SQL Server and submit mapped SOs."""
+        db = self.connect()
+        try:
+            hooks = db.execute("SELECT event_id,order_no FROM erp_hooks WHERE state='received' ORDER BY received_at LIMIT 100").fetchall()
+        finally:
+            db.close()
+        results = []
+        for event_id, order_no in hooks:
+            try:
+                orders = sqlserver.fetch_orders(order_no)
+                if not orders:
+                    state, reason = "review", "sql_order_not_found"
+                else:
+                    request_id = "HOOK-" + event_id[:110]
+                    result = self.submit({"request_id": request_id, "orders": orders})
+                    state, reason = result["state"], None
+            except Exception as error:
+                state, reason = "review", type(error).__name__
+            db = self.connect()
+            try:
+                with db:
+                    db.execute("UPDATE erp_hooks SET state=? WHERE event_id=?", (state, event_id))
+            finally:
+                db.close()
+            results.append({"event_id": event_id, "state": state, "reason": reason})
+        return results
 
     def submit(self, payload):
         validate_orders(payload)

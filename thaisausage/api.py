@@ -69,11 +69,14 @@ def create_server(config, service):
                 return
             try:
                 path = urlsplit(self.path).path
-                if path not in ("/api/v1/erp/orders", "/api/v1/erp/pull", "/api/v1/erp/hooks/order-ready"):
+                if path not in ("/api/v1/erp/orders", "/api/v1/erp/pull", "/api/v1/erp/hooks/order-ready", "/api/v1/erp/do-received"):
                     return self.reply(404, {"error": "not_found"})
                 payload = self.body()
                 if path == "/api/v1/erp/hooks/order-ready":
                     result = service.record_erp_hook(payload)
+                    return self.reply(202, result)
+                if path == "/api/v1/erp/do-received":
+                    result = service.receive_do(payload)
                     return self.reply(202, result)
                 if path == "/api/v1/erp/pull":
                     require(text(payload.get("request_id")), "request_id is required")
