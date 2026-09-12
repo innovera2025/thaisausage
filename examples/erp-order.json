@@ -1,0 +1,38 @@
+{
+  "request_id": "ERP-DEMO-0001",
+  "orders": [{
+    "order_no": "SO-DEMO-0001",
+    "order_date": "2026-09-11",
+    "delivery_date": null,
+    "payment_in_day": 0,
+    "customer": {
+      "code": "CUSTOMER-DEMO",
+      "name": "ลูกค้าทดสอบ",
+      "billing_address_line1": "ที่อยู่ทดสอบ",
+      "billing_address_line2": "",
+      "district": "เมือง",
+      "province": "นครปฐม",
+      "country": "ไทย",
+      "postcode": "73000",
+      "phone": "",
+      "sale_code": "SALE-DEMO",
+      "sale_name": "พนักงานทดสอบ",
+      "google_maps": null
+    },
+    "delivery_point_code": "CUSTOMER-DEMO",
+    "shipping_address": "ที่อยู่จัดส่งทดสอบ นครปฐม",
+    "pickup_hub_code": "REPLACE_WITH_REAL_HUB",
+    "pickup_hub_name": "คลังทดสอบ",
+    "items": [{
+      "line_no": 1,
+      "item_code": "ITEM-DEMO",
+      "description": "สินค้าทดสอบ",
+      "cbm": null,
+      "nw": null,
+      "main_unit": null,
+      "pack_unit": null,
+      "quantity": 2,
+      "unit_price": 100
+    }]
+  }]
+}

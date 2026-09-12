@@ -1,0 +1,62 @@
+{
+  "host": "127.0.0.1",
+  "port": 8080,
+  "database": "data/integration.sqlite3",
+  "api_key_env": "THAISAUSAGE_API_KEY",
+  "dry_run": true,
+  "source": {
+    "type": "sqlserver",
+    "id": "main-erp",
+    "company_id": "REPLACE_WITH_COMPANY"
+  },
+  "sqlserver": {
+    "connection_string_env": "ERP_SQLSERVER_CONNECTION_STRING",
+    "username_env": "ERP_SQL_USER",
+    "password_env": "ERP_SQL_PASSWORD",
+    "driver": "ODBC Driver 18 for SQL Server",
+    "auth_mode": "sql",
+    "encrypt": true,
+    "trust_server_certificate": false,
+    "connect_timeout_seconds": 10,
+    "query_timeout_seconds": 30,
+    "approved_objects": [],
+    "approved_query_set": "pending_phase_01_discovery"
+  },
+  "vrp": {
+    "base_url": "https://vrp.oneplatformth.com/api",
+    "token_env": "VRP_TOKEN",
+    "timeout_seconds": 30
+  },
+  "erp": {
+    "base_url": "",
+    "orders_path": "/api/orders",
+    "token_env": "ERP_TOKEN",
+    "auth_header": "Authorization",
+    "auth_prefix": "Bearer ",
+    "timeout_seconds": 30,
+    "orders_list_path": "data.orders",
+    "field_map": {
+      "order_no": "order_no",
+      "order_date": "order_date",
+      "delivery_date": "delivery_date",
+      "payment_in_day": "payment_in_day",
+      "customer": "customer",
+      "delivery_point_code": "delivery_point_code",
+      "shipping_address": "shipping_address",
+      "pickup_hub_code": "pickup_hub_code",
+      "pickup_hub_name": "pickup_hub_name"
+    },
+    "items_path": "items",
+    "item_field_map": {
+      "line_no": "line_no",
+      "item_code": "item_code",
+      "description": "description",
+      "cbm": "cbm",
+      "nw": "nw",
+      "main_unit": "main_unit",
+      "pack_unit": "pack_unit",
+      "quantity": "quantity",
+      "unit_price": "unit_price"
+    }
+  }
+}

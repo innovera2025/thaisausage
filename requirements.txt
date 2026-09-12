@@ -1,0 +1,2 @@
+# Required only when the SQL Server connector is enabled.
+pyodbc>=5.1,<6
