@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .env
 config/local.json
+deploy/vps.env
 data/
 eVRP_ไทยซอส/
 eVRP_ไทยซอส/Token_eVRP.pages

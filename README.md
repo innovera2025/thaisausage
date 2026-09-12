@@ -155,6 +155,13 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/hooks/order-ready \
 
 ## Deploy บน VPS
 
+กรอกไฟล์ [deploy/vps.env](/Users/innovera/Documents/thaisausage/deploy/vps.env) บนเครื่อง local
+หรือ copy จาก [deploy/vps.env.example](/Users/innovera/Documents/thaisausage/deploy/vps.env.example)
+ไฟล์นี้ถูก ignore และห้าม commit/publish ค่า SSH, SQL password, API key หรือ VRP token
+
+ค่าที่สำคัญคือ `VPS_HOST`, `VPS_PORT`, `VPS_USER`, `VPS_SSH_KEY` (แนะนำ SSH key แทน password),
+`ERP_SQLSERVER_CONNECTION_STRING`, `ERP_SQL_USER` และ `ERP_SQL_PASSWORD`
+
 เตรียมไฟล์ config บน VPS ก่อน โดยไม่ copy `.env` เข้า Git:
 
 ```sh
