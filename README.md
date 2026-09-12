@@ -174,7 +174,8 @@ docker compose -f deploy/docker-compose.yml logs --tail=100 thaisausage
 ```
 
 Compose bind port ไว้ที่ localhost และใช้ volume สำหรับ SQLite; ให้ reverse proxy ที่มี TLS
-เป็นผู้รับ traffic จาก ERP และส่งต่อเข้า `127.0.0.1:8080`
+เป็นผู้รับ traffic จาก ERP และส่งต่อเข้า container app; ชุด Compose นี้ใช้ Caddy และ
+`thaisausage.krs.co.th` เป็นค่าเริ่มต้นสำหรับ HTTPS อัตโนมัติ
 ตั้ง `sync.enabled=true` หลัง dry-run และ read-only SO verification ผ่านเท่านั้น
 ก่อน `docker compose up` ต้องตรวจ `config/local.json`, `.env` permission และ firewall
 

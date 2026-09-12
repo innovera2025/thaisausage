@@ -9,8 +9,10 @@ services:
     volumes:
       - ../config/local.json:/app/config/local.json:ro
       - thaisausage-data:/app/data
-    ports:
-      - "127.0.0.1:8080:8080"
+    expose:
+      - "8080"
+    networks:
+      - internal
     read_only: true
     tmpfs:
       - /tmp
@@ -22,5 +24,29 @@ services:
       timeout: 5s
       retries: 3
 
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      thaisausage:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   thaisausage-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  internal:
+    driver: bridge

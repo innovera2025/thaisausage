@@ -1,0 +1,4 @@
+thaisausage.krs.co.th {
+    reverse_proxy thaisausage:8080
+    encode gzip
+}
