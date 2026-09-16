@@ -588,7 +588,7 @@ class UpstreamErrorDetailTests(unittest.TestCase):
 
     def test_long_upstream_message_is_truncated(self):
         self.vrp.send.side_effect = RemoteError(400, "x" * 4000)
-        self.assertEqual(len(self.service.submit(self.payload)["upstream_error"]), 500)
+        self.assertEqual(len(self.service.submit(self.payload)["upstream_error"]), 2000)
 
     def test_missing_detail_leaves_no_field(self):
         self.vrp.send.side_effect = RemoteError(500)

@@ -455,7 +455,7 @@ class IntegrationService:
             result["reason"] = "upstream_http_%s" % error.status if error.status else "upstream_outcome_unknown"
             if error.detail:
                 # Kept so an operator can see why the upstream refused, without a second send.
-                result["upstream_error"] = error.detail[:500]
+                result["upstream_error"] = error.detail[:2000]
         except Exception:
             result["state"] = "needs_review"
             result["reason"] = "connector_error"

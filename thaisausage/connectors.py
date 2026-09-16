@@ -38,7 +38,7 @@ def request_json(method, base_url, path, headers, timeout, payload=None):
             return json.loads(content)
     except HTTPError as error:
         try:
-            detail = error.read(2048).decode("utf-8", "replace").strip() or None
+            detail = error.read(8192).decode("utf-8", "replace").strip() or None
         except Exception:
             detail = None
         raise RemoteError(error.code, detail) from None
