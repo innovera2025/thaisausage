@@ -62,6 +62,7 @@ Production ที่ติดตั้งอยู่ตาม Operations Guide 
 | `thaisausage/do_writer.py` | DO writer เข้า ERP: สร้าง INSERT แบบ parameterized, transaction เดียว, ปิดเป็นค่าเริ่มต้น |
 | `thaisausage/config.py` | อ่าน `.env` และ config JSON พร้อมตรวจค่าบังคับ |
 | `config/example.json` | แม่แบบ config (สำเนาจริงคือ `config/local.json` ซึ่งถูก ignore) |
+| `config/do-write-template.json` | แม่แบบ mapping ของ DO writer ครบ 55 + 24 คอลัมน์ตามลำดับของ ERP (ยังเว้น `path` ให้เติม) |
 | `examples/erp-order.json` | ตัวอย่าง request สำหรับ `/erp/orders` |
 | `docs/openapi.json` | OpenAPI 3.0 ที่ใช้แสดงผลใน `/docs` |
 | `deploy/` | Dockerfile, docker-compose.yml, Caddyfile และ `vps.env.example` |
@@ -140,7 +141,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/orders \
 | `do_write.enabled` | `false` | เปิดการเขียน DO เข้า ERP ห้ามเปิดจนกว่าจะผ่าน UAT และ sign-off |
 | `do_write.header_table`, `detail_table` | ว่าง | ชื่อตารางปลายทางที่ผ่านการ review |
 | `do_write.connection_string_env`, `username_env`, `password_env` | `ERP_SQLSERVER_WRITE_*`, `ERP_SQL_WRITE_*` | credential สำหรับเขียน ต้องคนละชุดกับบัญชี read-only |
-| `do_write.header_columns`, `detail_columns` | ว่าง | mapping รายคอลัมน์ (ดู `docs/do-insert-contract.md`) |
+| `do_write.header_columns`, `detail_columns` | ว่าง | mapping รายคอลัมน์ — คัดลอกโครงจาก `config/do-write-template.json` แล้วเติม `path` (ดู `docs/do-insert-contract.md`) |
 | `do_write.detail_line_start` | `1` | เลขเริ่มต้นของ `Slno` |
 
 Key ต่อไปนี้อยู่ใน example แต่โค้ดยังไม่ได้อ่าน จึงยังไม่มีผลกับการทำงานจริง: `source.*`, `sqlserver.driver`, `sqlserver.encrypt`, `sqlserver.trust_server_certificate`, `sqlserver.approved_objects`, `sqlserver.approved_query_set` ค่า driver และ encryption ที่ใช้จริงจะมาจาก `ERP_SQLSERVER_CONNECTION_STRING` เท่านั้น
@@ -504,7 +505,7 @@ curl -fsS https://thaisausage.krs.co.th/health
 python3 -m unittest discover -s tests -v
 ```
 
-ผลวันที่ 16 ก.ย. 2026: ผ่าน 94 จาก 94 test ครอบคลุม HTTP auth, validation, idempotency, การส่งซ้ำพร้อมกัน, timeout, DO staging, hook, credential ของ SQL และชุดทดสอบ DO writer (parameter binding, transaction, rollback, duplicate, dry-run และ flag ปิด) ทุก test ใช้ mock โดยไม่เรียก ERP หรือ eVRP จริง และไม่มี INSERT เข้า ERP เกิดขึ้น
+ผลวันที่ 16 ก.ย. 2026: ผ่าน 98 จาก 98 test ครอบคลุม HTTP auth, validation, idempotency, การส่งซ้ำพร้อมกัน, timeout, DO staging/callback (replay, conflict, concurrent), scheduled sweep, SQL guard, credential ของ SQL และชุดทดสอบ DO writer (parameter binding, transaction, rollback, duplicate, dry-run, flag ปิด และการสร้าง statement ตามคอลัมน์จริงของ ERP) ทุก test ใช้ mock โดยไม่เรียก ERP หรือ eVRP จริง และไม่มี INSERT เข้า ERP เกิดขึ้น
 
 ส่วนที่ยังไม่มี test เชื่อม SQL Server จริงคือ connection/query กับ schema ของ ERP; มี unit test สำหรับ `_group_rows` และชนิดข้อมูล `Decimal`/`date` แล้ว แต่ยังต้องทำ read-only verification กับ SO ที่อนุมัติ
 
