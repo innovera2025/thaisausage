@@ -148,6 +148,28 @@ class IntegrationTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             self.service.record_erp_hook({"event_id": "E-1", "event_type": "invoice.paid", "source_id": "erp"})
 
+    def test_erp_hook_rejects_unsafe_event_id(self):
+        with self.assertRaises(ContractError):
+            self.service.record_erp_hook({"event_id": "E/1", "event_type": "sales_order.ready", "source_id": "erp"})
+
+    def test_erp_hook_changed_payload_conflicts(self):
+        hook = {"event_id": "E-CONFLICT", "event_type": "sales_order.ready",
+                "source_id": "erp", "order_no": "SO-1"}
+        self.service.record_erp_hook(hook)
+        with self.assertRaises(Conflict):
+            self.service.record_erp_hook({**hook, "order_no": "SO-2"})
+
+    def test_dry_run_sweep_keeps_hook_received_for_live_replay(self):
+        dry = IntegrationService(self.database, True, self.vrp, self.erp)
+        dry.record_erp_hook({"event_id": "E-DRY", "event_type": "sales_order.ready",
+                             "source_id": "erp", "order_no": "SO-1"})
+        sqlserver = Mock()
+        sqlserver.fetch_orders.return_value = self.payload["orders"]
+        self.assertEqual(dry.sweep_hooks(sqlserver)[0]["state"], "received")
+        with sqlite3.connect(self.database) as db:
+            self.assertEqual(db.execute("SELECT state,reason FROM erp_hooks WHERE event_id='E-DRY'").fetchone(),
+                             ("received", "dry_run_preview"))
+
     def test_do_is_staged_without_erp_write(self):
         result = self.service.receive_do({"receipt_id": "DO-1", "do_no": "DO-1", "status": "delivered"})
         self.assertEqual(result, {"receipt_id": "DO-1", "state": "staged", "erp_write": False})
@@ -167,6 +189,22 @@ class IntegrationTests(unittest.TestCase):
         self.vrp.send.assert_called_once()
         with sqlite3.connect(self.database) as db:
             self.assertEqual(db.execute("SELECT state FROM erp_hooks WHERE event_id='E-SWEEP'").fetchone()[0], "sent")
+
+    def test_scheduled_approved_sweep_previews_without_consuming_order(self):
+        sqlserver = Mock()
+        sqlserver.fetch_approved_orders.return_value = self.payload["orders"]
+        dry = IntegrationService(self.database, True, self.vrp, self.erp)
+        result = dry.sweep_approved_orders(sqlserver)
+        self.assertEqual(result, [{"order_no": "SO-DEMO-0001", "state": "preview", "reason": "dry_run_preview"}])
+        self.vrp.send.assert_not_called()
+
+    def test_scheduled_approved_sweep_skips_claimed_order_in_live_mode(self):
+        sqlserver = Mock()
+        sqlserver.fetch_approved_orders.return_value = self.payload["orders"]
+        self.service.submit(self.payload)
+        result = self.service.sweep_approved_orders(sqlserver)
+        self.assertEqual(result[0]["reason"], "already_claimed")
+        self.vrp.send.assert_called_once()
 
     def test_erp_mapping_nested_fields(self):
         config = self.config["erp"]

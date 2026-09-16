@@ -28,7 +28,7 @@ request missing authority only for external writes/schema changes/live records, 
 
 ### Implementation Checklist
 
-- [ ] Default poll interval 60 seconds, configurable and disabled until source config is valid; read only ready SOs. Run one scheduled job at a time per source with durable lease, owner token and expiry.
+- [ ] Default poll interval 60 seconds, configurable and disabled until source config is valid; read only SOs where the reviewed query enforces `IsApprSo = 1`. Run one scheduled job at a time per source with durable lease, owner token and expiry.
 - [ ] Lease renewal/ownership checks prevent stale workers from committing progress after losing ownership; outbound sends rely additionally on durable per-request guards.
 - [ ] Timestamp strategy uses stable keyset (changed_at, source_pk), fixed scan boundary, configurable overlap and periodic full in-scope reconciliation. Header-only timestamps cannot prove line change coverage.
 - [ ] If using existing Change Tracking: track all contributing tables, verify minimum valid version before every cycle, capture consistent version boundary and reseed if retention expires; map changed detail keys back to SO.
@@ -84,4 +84,3 @@ What green proves: Measured scheduled flow under test load with no observed miss
 Read umbrella, this phase and dependency reports; inspect worktree and migrations before resuming.
 Resume first unchecked task, keep legacy submission history, and never rerun a live import just to reproduce proof.
 Next Step (Cursor Plan / RIPER-5): RESEARCH this phase when its dependencies are evidenced, then EXECUTE on implementation instruction, VERIFY and REVIEW.
-

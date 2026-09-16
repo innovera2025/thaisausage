@@ -10,7 +10,7 @@ from .contracts import ContractError, require, text
 from .service import Conflict
 
 
-def create_server(config, service):
+def create_server(config, service, on_hook_received=None):
     key = os.environ[config["api_key_env"]]
     openapi_path = Path(__file__).resolve().parent.parent / "docs" / "openapi.json"
 
@@ -66,13 +66,18 @@ def create_server(config, service):
                     self.reply(500, {"error": "openapi_unavailable"})
                 return
             if path == "/docs":
-                html = b"<!doctype html><html><head><title>Thaisausage API</title><link rel=\"stylesheet\" href=\"https://unpkg.com/swagger-ui-dist@5/swagger-ui.css\"></head><body><div id=\"swagger-ui\"></div><script src=\"https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js\"></script><script>SwaggerUIBundle({url:'/openapi.json',dom_id:'#swagger-ui'})</script></body></html>"
+                html = b"<!doctype html><html><head><title>Thaisausage API</title><link rel=\"stylesheet\" href=\"https://unpkg.com/swagger-ui-dist@5.32.15/swagger-ui.css\"></head><body><div id=\"swagger-ui\"></div><script src=\"https://unpkg.com/swagger-ui-dist@5.32.15/swagger-ui-bundle.js\"></script><script>SwaggerUIBundle({url:'/openapi.json',dom_id:'#swagger-ui'})</script></body></html>"
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(html)))
-                self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://unpkg.com; connect-src 'self'")
+                self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' https://unpkg.com 'sha256-A4x1ajGX5Ld6sd0YFJ5pRv7FXGFJXmT6CMLMAzdgORI='; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://unpkg.com; connect-src 'self' https://unpkg.com")
                 self.end_headers()
                 self.wfile.write(html)
+                return
+            if path == "/favicon.ico":
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
                 return
             if not self.authenticated():
                 return
@@ -80,6 +85,37 @@ def create_server(config, service):
                 result = service.get(unquote(path[len("/api/v1/submissions/"):]))
                 return self.reply(200 if result else 404, result or {"error": "not_found"})
             self.reply(404, {"error": "not_found"})
+
+        def do_HEAD(self):
+            path = urlsplit(self.path).path
+            if path == "/health":
+                content = json.dumps({"status": "ok", "dry_run": config["dry_run"]}, ensure_ascii=False).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                return
+            if path == "/openapi.json":
+                try:
+                    content = openapi_path.read_bytes()
+                except OSError:
+                    self.send_response(500)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                return
+            if path == "/docs":
+                html = b"<!doctype html><html><head><title>Thaisausage API</title><link rel=\"stylesheet\" href=\"https://unpkg.com/swagger-ui-dist@5.32.15/swagger-ui.css\"></head><body><div id=\"swagger-ui\"></div><script src=\"https://unpkg.com/swagger-ui-dist@5.32.15/swagger-ui-bundle.js\"></script><script>SwaggerUIBundle({url:'/openapi.json',dom_id:'#swagger-ui'})</script></body></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(html)))
+                self.end_headers()
+                return
+            self.send_response(404)
+            self.end_headers()
 
         def do_POST(self):
             if not self.authenticated():
@@ -91,6 +127,8 @@ def create_server(config, service):
                 payload = self.body()
                 if path == "/api/v1/erp/hooks/order-ready":
                     result = service.record_erp_hook(payload)
+                    if on_hook_received:
+                        on_hook_received()
                     return self.reply(202, result)
                 if path == "/api/v1/erp/do-received":
                     result = service.receive_do(payload)

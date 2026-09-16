@@ -6,8 +6,11 @@ the ERP database and does not accept SQL from HTTP request bodies.
 
 import os
 import re
+from datetime import date, datetime
+from decimal import Decimal
 
 from .contracts import ContractError
+from .connectors import mapped
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
@@ -77,7 +80,7 @@ class SQLServerConnector:
         """Execute a pre-reviewed SELECT; reject write-shaped statements."""
         if not isinstance(sql, str) or not re.match(r"^\s*SELECT\b", sql, re.I):
             raise ContractError("Only SELECT statements are allowed")
-        if re.search(r"\b(INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|ALTER|DROP|TRUNCATE)\b", sql, re.I):
+        if re.search(r"\b(INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|ALTER|DROP|TRUNCATE|INTO)\b", sql, re.I):
             raise ContractError("SQL statement contains a forbidden write or side effect")
         if not isinstance(parameters, (tuple, list)):
             raise ContractError("SQL parameters must be a tuple or list")
@@ -99,6 +102,18 @@ class SQLServerConnector:
             connection.close()
         return self._group_rows(rows)
 
+    def fetch_approved_orders(self):
+        """Fetch the reviewed, approval-filtered SO query for scheduled sync."""
+        sql = self.config.get("approved_orders_query")
+        if not sql:
+            raise ContractError("Configure sqlserver.approved_orders_query after schema discovery")
+        connection = self.connect()
+        try:
+            rows = self.select_approved(connection, sql)
+        finally:
+            connection.close()
+        return self._group_rows(rows)
+
     def _group_rows(self, rows):
         order_key = self.config.get("order_key", "order_no")
         if not rows:
@@ -111,15 +126,27 @@ class SQLServerConnector:
             groups.setdefault(key, []).append(row)
         result = []
         for key, group in groups.items():
-            order = mapped(group[0], self.config.get("field_map", {}))
+            order = self._normalize(mapped(group[0], self.config.get("field_map", {})))
             items = []
             for row in group:
-                item = mapped(row, self.config.get("item_field_map", {}))
+                item = self._normalize(mapped(row, self.config.get("item_field_map", {})))
                 if item.get("item_code") is not None:
                     items.append(item)
             order["items"] = items
             result.append(order)
         return result
+
+    def _normalize(self, value):
+        """Convert common pyodbc values into JSON-compatible contract values."""
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {key: self._normalize(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._normalize(item) for item in value]
+        return value
 
 
 def approved_identifier(value):

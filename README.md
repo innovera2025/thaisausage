@@ -1,7 +1,7 @@
 # Thaisausage ERP integration
 
 แผนงานล่าสุด: [SQL Server → JSON → eVRP พร้อม scheduler/COD และ rollout](process/features/erp-sqlserver/active/ERP_SQLSERVER_PLAN_12-09-26.md).
-มีแผนย่อย 6 phase; โค้ดปัจจุบันยังเป็น API/REST foundation ตามคู่มือด้านล่าง SQL connector ยังไม่ได้ implement.
+มีแผนย่อย 6 phase; โค้ดปัจจุบันมี API, SQL connector และ scheduled approved-SO worker แล้ว แต่ยังปิด live SQL sweep จนกว่าจะยืนยัน schema/mapping และ UAT.
 
 API กลางรับ Sales Order จาก ERP แล้วส่งไป eVRP ตามเอกสารใน `eVRP_ไทยซอส/`
 สมมติฐาน: thaisausage คือบริการกลางของโปรเจกต์นี้ และ eVRP คือปลายทางส่งคำสั่งซื้อ
@@ -43,7 +43,7 @@ DRIVER={ODBC Driver 18 for SQL Server};SERVER=erp-db.example,1433;DATABASE=ERP;E
 ```
 
 บัญชีนี้ควรมีสิทธิ์ `SELECT` เฉพาะ view/table ที่อนุมัติเท่านั้น
-connection string นี้เป็น config contract สำหรับ SQL connector ที่จะทำใน Phase 01–02;
+connection string นี้เป็น config contract สำหรับ SQL connector;
 โค้ด SQL connector เริ่มต้นอยู่ใน `thaisausage/sqlserver.py` และจะเปิด connection เฉพาะเมื่อเรียกใช้งาน
 ต้องติดตั้ง `pyodbc` และ Microsoft ODBC Driver 18 ใน environment ที่ Deploy
 ก่อนมี schema/mapping ยืนยัน ระบบจะทำได้เฉพาะ metadata check และไม่อ่านตารางธุรกิจ
@@ -90,7 +90,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/pull \
 ```
 
 `query` ส่งเป็น query string ให้ ERP ตาม config ดึงหนึ่งหน้า/หนึ่ง request เท่านั้น
-ยังไม่มี scheduler, pagination อัตโนมัติ, watermark หรือการเขียนสถานะกลับ ERP
+ยังไม่มี pagination อัตโนมัติ, watermark, durable outbox/attempt history หรือการเขียนสถานะกลับ ERP
 โหมด dry-run ของ pull ยังเรียก GET ไป ERP แต่ไม่ส่งไป eVRP
 กรณีไม่มีรายการจะคืน `state: empty` ไม่สร้าง submission
 
@@ -112,7 +112,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/pull \
 ผลลัพธ์หลัก: `{request_id, state, dry_run}` และ `replayed: true` เมื่อเป็น request เดิม
 `validated` (HTTP 200) = ผ่าน local validation ใน dry-run, `sent` (200) = upstream ยืนยัน success,
 `sending` (202) = จองแล้ว/กำลังส่ง, `needs_review` (202) = ต้องตรวจสอบผล upstream
-HTTP 202 **ไม่ได้หมายความว่าส่งสำเร็จ** และไม่มี retry worker ที่จะส่งต่อให้เอง
+HTTP 202 **ไม่ได้หมายความว่าส่งสำเร็จ** ระบบส่งต่อด้วย scheduled worker เมื่อเปิด sync และไม่ resend อัตโนมัติเมื่อผลลัพธ์ไม่แน่นอน ต้อง reconcile ก่อน
 HTTP 401 = key ไม่ถูกต้อง, 409 = request/order ซ้ำขัดแย้ง, 422 = ข้อมูล/config ไม่ถูกต้อง,
 502 = ดึง ERP ไม่สำเร็จ, 500 = internal error
 payload สูงสุด 1 MiB และ batch 100 orders เป็นขีดจำกัดของบริการนี้
@@ -138,7 +138,7 @@ SQLite เก็บ hash, สถานะ และเลขอ้างอิ�
 
 ## ERP webhook trigger
 
-ERP เรียก endpoint นี้เมื่อ SO ผ่านสถานะพร้อมส่งหรือมีการแก้ไข:
+การส่งหลักใช้ Schedule ดึงเฉพาะ SO ที่ Approve แล้วจาก `approved_orders_query` ที่ผ่านการ review:
 
 ```sh
 curl -X POST http://127.0.0.1:8080/api/v1/erp/hooks/order-ready \
@@ -147,13 +147,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/hooks/order-ready \
   -d '{"event_id":"ERP-EVENT-0001","event_type":"sales_order.ready","source_id":"main-erp","company_id":"THAI","order_no":"SO-0001","changed_at":"2026-09-12T10:00:00+07:00"}'
 ```
 
-รับ `event_type` ได้ `sales_order.ready` หรือ `sales_order.changed` และต้องมี `event_id`, `source_id`;
-`company_id`, `order_no`, `changed_at` เป็นข้อมูลช่วยจำกัดขอบเขตการกวาด
-ผล `202` แปลว่า webhook ถูกบันทึกแล้วและมี `sweep: queued`; event เดิมส่งซ้ำได้และจะไม่สร้างแถวใหม่
-ระบบจะใช้ event เป็น trigger แล้วอ่าน SO ฉบับเต็มจาก SQL Server ตาม mapping/สถานะที่ตรวจได้
-ไม่ควรส่งจำนวนเงินหรือรายการสินค้าไว้ใน hook เพื่อป้องกันข้อมูลไม่ตรงกับฐาน ERP
-ใน foundation ปัจจุบัน hook ถูกเก็บใน SQLite ก่อน; SQL sweep worker จะ implement ใน Phase 04
-ดังนั้น endpoint นี้ยังไม่ทำให้ eVRP รับ SO ทันทีจนกว่า SQL connector/worker จะเปิดใช้งาน
+ระบบจะ query ตามรอบ `sync.interval_seconds` และส่งเฉพาะแถวที่ query กรองว่า Approve แล้ว
+ไม่ใช้ Hook เป็นตัวเริ่มงานอีกต่อไป; endpoint Hook เดิมเก็บไว้เพื่อ compatibility เท่านั้น
 
 ## Deploy บน VPS
 

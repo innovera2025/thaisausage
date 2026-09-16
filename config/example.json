@@ -21,6 +21,7 @@
     "query_timeout_seconds": 30,
     "approved_objects": [],
     "approved_query_set": "pending_phase_01_discovery",
+    "approved_orders_query": "",
     "orders_query": "",
     "order_key": "order_no",
     "field_map": {},
@@ -66,5 +67,19 @@
   ,"sync": {
     "enabled": false,
     "interval_seconds": 60
+  }
+  ,"do_write": {
+    "enabled": false,
+    "header_table": "",
+    "detail_table": "",
+    "connection_string_env": "ERP_SQLSERVER_WRITE_CONNECTION_STRING",
+    "username_env": "ERP_SQL_WRITE_USER",
+    "password_env": "ERP_SQL_WRITE_PASSWORD",
+    "auth_mode": "sql",
+    "connect_timeout_seconds": 10,
+    "query_timeout_seconds": 30,
+    "detail_line_start": 1,
+    "header_columns": {},
+    "detail_columns": {}
   }
 }

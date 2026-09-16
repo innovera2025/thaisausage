@@ -1,6 +1,8 @@
 import os
 import unittest
-from unittest.mock import patch
+from datetime import date
+from decimal import Decimal
+from unittest.mock import Mock, patch
 
 from thaisausage.contracts import ContractError
 from thaisausage.sqlserver import SQLServerConnector, approved_identifier, connection_string
@@ -55,9 +57,36 @@ class SQLServerConfigTests(unittest.TestCase):
             def cursor(self):
                 return Cursor()
         self.assertEqual(connector.select_approved(Connection(), "SELECT 1"), [{"value": 1}])
-        for sql in ("UPDATE orders SET x=1", "SELECT 1; DELETE FROM orders", "EXEC dbo.Export"):
+        for sql in ("UPDATE orders SET x=1", "SELECT 1; DELETE FROM orders", "SELECT x INTO #tmp FROM orders", "EXEC dbo.Export"):
             with self.subTest(sql=sql), self.assertRaises(ContractError):
                 connector.select_approved(Connection(), sql)
+
+    def test_group_rows_imports_mapping_and_normalizes_pyodbc_values(self):
+        connector = SQLServerConnector({
+            "order_key": "order_no",
+            "field_map": {"order_no": "order_no", "order_date": "order_date",
+                          "customer.code": "customer_code", "pickup_hub_code": "hub",
+                          "shipping_address": "address"},
+            "item_field_map": {"item_code": "item_code", "quantity": "quantity", "unit_price": "price"},
+        })
+        result = connector._group_rows([{
+            "order_no": "SO-1", "order_date": date(2026, 9, 14), "customer_code": "C-1",
+            "hub": "H-1", "address": "test", "item_code": "I-1",
+            "quantity": Decimal("2.50"), "price": Decimal("10.00"),
+        }])
+        self.assertEqual(result[0]["order_date"], "2026-09-14")
+        self.assertEqual(result[0]["items"][0]["quantity"], 2.5)
+
+    def test_fetch_approved_orders_uses_configured_query_without_parameters(self):
+        connector = SQLServerConnector({"approved_orders_query": "SELECT order_no FROM approved_orders"})
+        connector.connect = Mock()
+        connection = connector.connect.return_value
+        cursor = connection.cursor.return_value
+        cursor.description = [("order_no",)]
+        cursor.fetchall.return_value = [("SO-1",)]
+        connector._group_rows = Mock(return_value=[{"order_no": "SO-1", "items": []}])
+        self.assertEqual(connector.fetch_approved_orders(), [{"order_no": "SO-1", "items": []}])
+        cursor.execute.assert_called_once_with("SELECT order_no FROM approved_orders", ())
 
 
 if __name__ == "__main__":

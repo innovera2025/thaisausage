@@ -12,6 +12,7 @@ token หรือข้อมูลลูกค้าเต็มชุด ก�
 - view/table ที่อนุมัติสำหรับ SO header, SO lines, customer, ship-to, hub/warehouse
 - primary key และ composite identity ของบริษัท/สาขา + SO
 - สถานะที่หมายถึง approved/ready, cancelled และ amended
+- ยืนยันแล้ว: สถานะ SO ที่ Approve คือ `IsApprSo = 1`; ยังต้องระบุตาราง/View ที่มี field นี้
 - ฟิลด์ที่บอกการแก้ไขของ header, lines, customer และ ship-to
 - วิธี tracking ที่พิสูจน์ได้: Change Tracking, change timestamp หรือ bounded ready-order scan
 - นโยบายราคา/ภาษี/ส่วนลด/หน่วย และ master code ที่ตรงกับ eVRP
