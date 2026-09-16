@@ -321,7 +321,8 @@ thread `sql-sweep` เริ่มพร้อม HTTP server และทำง
 - ถ้า `sync.enabled=false` ระบบข้ามรอบนั้นไป แต่ HTTP API ยังทำงานตามปกติ
 - เรียก `sqlserver.approved_orders_query` ที่ผ่านการ review แบบ SELECT-only ไม่มีพารามิเตอร์ และไม่รับ SQL จาก HTTP
 - query ต้องกรองเฉพาะ SO ที่อนุมัติแล้ว (`IsApprSo = 1`) ระบบเชื่อผลลัพธ์ของ query นี้ จึงไม่มีตัวกรองซ้ำในโค้ด
-- แต่ละ SO ใช้ `request_id = "SCHEDULE-" + sha256(order_no)[:32]` แล้วผ่าน submission guard เดียวกับ endpoint อื่น
+- แต่ละ SO ใช้ `request_id = "SCHEDULE-<hash ของ order_no>-<hash ของเนื้อข้อมูล>"` ข้อมูลเดิมได้ id เดิม ข้อมูลที่แก้แล้วได้ id ใหม่ (ดู 12.3)
+- ระวัง `TOP (n)` ใน query จำกัด **จำนวนแถว** ไม่ใช่จำนวนใบ ถ้าตั้งน้อยเกินไป ใบที่เกินโควตาจะไม่ถูกส่งเลยแม้รอบถัดไป (ปริมาณจริงประมาณ 108 ใบ / 293 แถวต่อวัน)
 - SO ที่ส่งสำเร็จแล้วได้ `skipped` เหตุผล `already_sent`; SO ที่ครั้งก่อนค้างที่ `sending`/`needs_review` จะได้ `needs_review` เหตุผล `prior_attempt_*` และระบบไม่ส่งซ้ำให้เอง
 - SO ที่มีบรรทัดสินค้าไม่มี `item_code` จะได้ `review` เหตุผล `detail_item_code_missing` และไม่ถูกส่งทั้งใบ
 - ถ้าอ่าน query ทั้งชุดไม่ได้ (เช่นแถวไม่มี order key) รอบนั้นคืนผลเดียวเป็น `review` โดยไม่โยน exception ออกไป
@@ -486,12 +487,41 @@ curl -fsS https://thaisausage.krs.co.th/health
 | 502 `erp_request_failed` | ERP REST ไม่ตอบ, ไม่ใช่ HTTPS หรือเจอ redirect | ตรวจ `erp.base_url` และ token (ระบบไม่ follow redirect) |
 | hook ค้างที่ `received` | `sync.enabled=false` หรือ sweep error ทั้งรอบ | เปิด sync ตาม gate และตรวจ SQL config และ driver |
 | hook เป็น `review` | ไม่พบ SO, SQL error, validate ไม่ผ่าน, order_no ซ้ำ, order_no หาย หรือข้อมูลเก่าที่ไม่ทราบ hash | ทดสอบ query ด้วย order_no นั้นแบบ read-only แล้วตรวจ reason/mapping |
-| submission เป็น `needs_review` | eVRP timeout, error หรือตอบไม่ตรงรูปแบบ | ตรวจที่ eVRP ด้วยเลข SO ก่อน ห้ามส่ง payload ที่เปลี่ยนแล้วซ้ำ |
+| submission เป็น `needs_review` | eVRP timeout, error หรือตอบไม่ตรงรูปแบบ | อ่าน `upstream_error` ในผลลัพธ์ก่อน แล้วตรวจที่ eVRP ด้วยเลข SO; ห้ามส่ง payload ที่เปลี่ยนแล้วซ้ำด้วย request_id เดิม |
+| `upstream_http_422` + `PICKUP_HUB_NOT_FOUND` | รหัส hub ที่ส่งไปไม่มีใน Master Hub ของ eVRP | ขอรหัสจริงจาก eVRP แล้วแปลงใน `approved_orders_query` ด้วย `CASE` |
+| `upstream_http_422` + `CUSTOMER_MASTER_REQUIRED` | ลูกค้ายังไม่มี master/จุดส่ง/Route ในระบบ eVRP | ให้ eVRP สร้าง master ก่อน ระบบเราแก้เองไม่ได้ |
+| `upstream_http_409` + `REQUEST_ID_CONFLICT` | ส่ง request_id เดิมด้วยข้อมูลที่แก้แล้ว | ปกติระบบสร้าง id ใหม่ให้อัตโนมัติเมื่อข้อมูลเปลี่ยน; ถ้ายังชนแปลว่า payload เหมือนเดิมจริง |
 | `/docs` หน้าว่าง | browser โหลด unpkg.com ไม่ได้ | ใช้ `/openapi.json` กับ Postman หรือ Swagger Editor แทน |
 | app unhealthy | process ค้าง หรือ config ผิด | `docker compose logs --tail=100 thaisausage` |
 | HTTPS ใช้ไม่ได้ | DNS ผิด หรือพอร์ต 80/443 ถูกปิด | ตรวจ DNS, firewall และ `docker compose logs caddy` |
 
-### 12.3 ขั้นตอนเปิดใช้งานจริง (ย่อ)
+### 12.3 ข้อกำหนดฝั่ง eVRP ที่พบจากการใช้งานจริง (16 ก.ย. 2026)
+
+สิ่งเหล่านี้ไม่มีในเอกสารของผู้ให้บริการ แต่พบตอนส่ง SO ใบจริงใบแรก:
+
+- **eVRP จอง `request_id` ไว้แม้จะปฏิเสธ payload นั้น** ส่ง id เดิมพร้อมข้อมูลที่แก้แล้วจะได้ `409 REQUEST_ID_CONFLICT` ระบบจึงสร้าง `request_id` จาก `order_no` บวก hash ของเนื้อข้อมูล เพื่อให้ข้อมูลที่แก้แล้วได้ identity ใหม่เสมอ
+- **รหัส hub ต้องมีใน Master Hub ของ eVRP** รหัสคลังของ ERP (`L01` กทม., `L03` นครปฐม) ไม่ใช่รหัสเดียวกับของ eVRP ต้องแปลงใน query
+- **ลูกค้าต้องมี master + จุดส่ง + Route ในระบบ eVRP ก่อน** มิฉะนั้นได้ `CUSTOMER_MASTER_REQUIRED` เป็นงานฝั่ง eVRP ล้วน ระบบเราตรวจล่วงหน้าไม่ได้
+- **`delivery_date` ว่างได้** eVRP จะ default เป็น `order_date` แล้วตอบ warning `DELIVERY_DATE_DEFAULTED`
+- ข้อความปฏิเสธจาก eVRP ถูกเก็บไว้ในฟิลด์ `upstream_error` ของ submission (สูงสุด 2000 ตัวอักษร) อ่านได้โดยไม่ต้องส่งซ้ำ
+
+### 12.4 การล้าง claim เพื่อส่งใหม่
+
+`order_claims` กันการส่งซ้ำ ระบบจะไม่ส่งใบเดิมอีกเองไม่ว่ากรณีใด การล้าง claim ทำได้เฉพาะเมื่อ**ยืนยันแล้วว่า eVRP ไม่ได้รับ**:
+
+- ปลอดภัย: `upstream_http_422` หรือ `409` — eVRP ปฏิเสธชัดเจน ไม่มีข้อมูลค้างฝั่งเขา
+- **ห้าม**: `upstream_outcome_unknown` หรือ timeout — ต้องตรวจกับ eVRP ด้วยเลข SO ก่อนเสมอ
+
+```sh
+docker compose -f deploy/docker-compose.yml exec -T thaisausage python -c "
+import sqlite3
+db = sqlite3.connect('data/integration.sqlite3')
+with db:
+    db.execute(\"DELETE FROM order_claims WHERE TRIM(order_no)='SO-XXXX'\")
+print('cleared')"
+```
+
+### 12.5 ขั้นตอนเปิดใช้งานจริง (ย่อ)
 
 - Gate A: ติดตั้ง ODBC แล้ว, ผ่าน metadata check (หัวข้อ 9) และบัญชี SQL เป็น read-only จริง
 - Gate B: ใส่ `approved_orders_query` และ mapping แล้ว ทดสอบกับ SO ที่อนุมัติใน dry-run ต้องได้ JSON ถูกต้องครบทุกกรณี (COD, credit, ของแถม, หลายบรรทัด, ภาษาไทย, ทศนิยม)

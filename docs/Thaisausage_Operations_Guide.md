@@ -281,6 +281,26 @@ Operator rules:
 
 ## 11. Recovery rules
 
+### Reading a refusal from eVRP
+
+A refused submission keeps the upstream explanation, so no second send is needed to learn why:
+
+```sh
+docker compose -f deploy/docker-compose.yml exec -T thaisausage python -c "
+import sqlite3, json
+db = sqlite3.connect('data/integration.sqlite3')
+for rid, result in db.execute('SELECT request_id,result FROM submissions WHERE state=\"needs_review\" ORDER BY created_at DESC LIMIT 5'):
+    r = json.loads(result)
+    print(rid, r.get('reason'))
+    print('  ', r.get('upstream_error', '-')[:400])"
+```
+
+Known refusals and their owner: `PICKUP_HUB_NOT_FOUND` and `CUSTOMER_MASTER_REQUIRED` are eVRP master-data
+tasks; `REQUEST_ID_CONFLICT` means the same identity was reused with different data. Clearing an
+`order_claims` row to allow a fresh attempt is permitted only after a definitive refusal (422/409),
+never after a timeout whose outcome is unknown.
+
+
 `needs_review` means the outcome may be unknown. Check eVRP using its business reference before replay.
 Never delete `order_claims` to force a resend. A changed SO after send becomes an amendment review item;
 there is no documented update/cancel contract in the current integration package.

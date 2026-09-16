@@ -121,6 +121,9 @@ eVRP เรียก `POST /api/v1/vrp/do-received` หลังสร้าง 
 | VRP-05 | Business reject | mock 422 | not marked sent; actionable error | response |
 | VRP-06 | Duplicate | repeat identical request | idempotent logical result | ID/reference |
 | VRP-07 | Auth failure | mock 401/403 | no uncontrolled loop; alert operator | status |
+| VRP-08 | Unknown hub | send a hub code absent from the eVRP master | 422 `PICKUP_HUB_NOT_FOUND`; message stored in `upstream_error` | submission record |
+| VRP-09 | Customer without master | send an SO whose customer has no delivery point/route | 422 `CUSTOMER_MASTER_REQUIRED`; no retry | submission record |
+| VRP-10 | Identity reuse | resend a corrected order under the previous request_id | 409 `REQUEST_ID_CONFLICT`; the scheduler must generate a new id instead | request_id values |
 
 ERP must treat 202 as accepted for processing, not proof of eVRP completion. ERP may retry transport failures with the same identity. Thaisausage does not run an automatic retry worker or attempt history yet. A 409 stops automation. A 422 requires payload correction. `needs_review` requires operator reconciliation.
 
