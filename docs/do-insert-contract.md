@@ -5,6 +5,11 @@ Status: 🚧 รอ ERP DBA เติมชนิดข้อมูลและ�
 Target tables: `tbl_DOhdr` (Header) และ `tbl_Dodtl` (Detail)  
 Plan: `process/features/erp-sqlserver/active/PHASE_07_DO_INSERT_PLAN_16-09-26.md`
 
+DO เข้าระบบทาง `POST /api/v1/vrp/do-received` (eVRP → Thai Sausage) ระบบจะบันทึก staging ก่อน แล้วเรียก writer ต่อเมื่อ `do_write.enabled=true` และ mapping/credential ผ่านการอนุมัติ
+identity ของ staging คือ `eVRP:<receipt_id>` ส่วน DO ที่มาทาง endpoint เดิมของ ERP คือ `erp:<receipt_id>`
+writer จะอ้างถึง DO ด้วย source + receipt_id เสมอ
+การเขียนเข้า ERP จริงต้องเติมตารางนี้ครบ ผ่าน UAT และเปิด `do_write.enabled` ด้วยการอนุมัติ
+
 เอกสารนี้คือแบบฟอร์มสำหรับให้ ERP DBA และเจ้าของระบบเติมให้ครบ ช่องที่เขียนว่า "รอ DBA"
 คือข้อมูลที่ระบบจะไม่เดาเด็ดขาด writer จะไม่ทำงานจนกว่า mapping จะครบและมีการเปิด flag
 
@@ -18,6 +23,40 @@ Plan: `process/features/erp-sqlserver/active/PHASE_07_DO_INSERT_PLAN_16-09-26.md
 | `DocuNw` | NULL | `{"source": "fixed", "value": null}` |
 | `EntryDate` | เวลาของ SQL Server | `{"source": "server_time"}` ใส่ `GETDATE()` ลงใน statement ไม่ใช่ค่าจากเรา |
 | `TransactionNo` | ค่าเดียวกันทั้ง Header และ Detail | `{"source": "transaction_no"}` |
+
+## 1.1 SQL ต้นฉบับที่ได้รับ (16-09-26)
+
+ได้รับคำสั่ง INSERT จริงของ ERP แล้ว สรุปสิ่งที่ยืนยันได้จากคำสั่งนั้น:
+
+- `tbl_DOhdr` มี **55 คอลัมน์** (มากกว่าที่เคยระบุไว้ 45 คอลัมน์ — เพิ่ม `IsApprovedBy/Date`, `IsClosedBy/Date`, `IsCompleteBy/Date`, `IsCheckBy/Date`)
+- `tbl_Dodtl` มี **24 คอลัมน์** ตรงกับที่ระบุไว้เดิมทุกช่อง
+- จำนวนคอลัมน์กับจำนวนค่าใน VALUES ตรงกันทั้งสองคำสั่ง
+- ต้นฉบับเขียน INSERT สองคำสั่งต่อกันและใส่ Detail ได้ครั้งละหนึ่งบรรทัด ระบบของเราจะส่งเป็นคำสั่งแยกแบบ parameterized ภายใน transaction เดียวกัน ผลลัพธ์เท่ากันแต่ปลอดภัยกว่า
+- `EntryDate` ใช้ `getdate()` ในคำสั่ง ไม่ใช่ค่าที่ส่งเข้าไป ตรงกับที่ระบบ implement ไว้แล้ว
+
+ชื่อ placeholder หลายตัวไม่ตรงกับชื่อคอลัมน์ จึงต้องยืนยันความหมายก่อนใช้งาน:
+
+| คอลัมน์ | Placeholder | สิ่งที่ต้องยืนยัน |
+|---|---|---|
+| `DoNo` | `?cRun` | เป็นเลขรันจากระบบใด ใครเป็นผู้ออก |
+| `DoType` | `?cDeliveryType` | เป็นประเภทการจัดส่งหรือประเภทเอกสาร |
+| `VatType` | `?cIncludeVat` | ค่านี้คือ "ราคารวมภาษี" หรือ "ชนิดภาษี" กันแน่ |
+| `Discount` | `?cPerdis` | เป็นเปอร์เซ็นต์ส่วนลดใช่หรือไม่ (ต่างจาก `DiscountAmount`) |
+| `EntryBy` | `?cUser` | ใช้บัญชีใดสำหรับ integration |
+| `Company` / `Comname` | `?cCompCode` / `?cCompName` | ค่าคงที่ต่อ environment หรือมาจาก SO |
+| `LocationCode` / `LocationName` | `?c_LocNo` / `?c_LocName` | คลังต้นทางหรือสาขา |
+| `Qty` / `Units` | `?xMainQuantity` / `?xmainUnits` | เป็นหน่วยหลักเสมอหรือมีหน่วยรอง |
+| `Slno` | `?xNumber` | เริ่มที่ 0 หรือ 1 |
+
+## 1.2 แม่แบบ config ที่สร้างจาก SQL นี้
+
+`config/do-write-template.json` ถูกสร้างจากคำสั่งข้างต้น มีครบ 55 + 24 คอลัมน์ตามลำดับเดิม
+ช่อง `path` ที่ยังว่าง **71 ช่อง** คือสิ่งที่ต้องเติมจาก payload ของ DO ที่ตกลงกับ eVRP
+ระบบจะปฏิเสธการทำงานตราบใดที่ยังมีช่องว่าง และมี unit test ยืนยันว่าเมื่อเติมครบแล้ว
+คำสั่งที่สร้างได้ตรงกับลำดับคอลัมน์ของ ERP ทุกช่อง (`tests/test_sqlserver_do.py`)
+
+ช่องที่เติมให้แล้วอัตโนมัติคือ `TransactionNo` (ผูก Header กับ Detail), `Slno` (ลำดับบรรทัด),
+`EntryDate` (`GETDATE()`), `IsAcc = 0`, `IsAccBy = NULL`, `IsAccDate = NULL`, `DocuNw = NULL`
 
 ## 2. วิธีเขียน mapping ใน config
 
@@ -62,9 +101,17 @@ Plan: `process/features/erp-sqlserver/active/PHASE_07_DO_INSERT_PLAN_16-09-26.md
 | `DeliveryDate` | รอ DBA | รอ DBA | วันที่จัดส่งจาก SO หรือ eVRP | ต้องมีค่าเสมอหรือไม่ | 🟡 |
 | `DoType` | รอ DBA | รอ DBA | รอกำหนด | ค่าที่อนุญาตและความหมาย | 🔴 |
 | `IsApproved` | รอ DBA | รอ DBA | ค่าเริ่มต้นตอน Insert | ใครเปลี่ยนภายหลัง | 🔴 |
+| `IsApprovedBy` | รอ DBA | รอ DBA | ผู้อนุมัติ (`?cIsApprovedBy`) | ใส่ NULL หรือบัญชี integration | 🔴 |
+| `IsApprovedDate` | รอ DBA | รอ DBA | วันที่อนุมัติ (`?cIsApprovedDate`) | ใส่ NULL หรือเวลาใด | 🔴 |
 | `IsClosed` | รอ DBA | รอ DBA | ค่าเริ่มต้นตอน Insert | — | 🔴 |
+| `IsClosedBy` | รอ DBA | รอ DBA | ผู้ปิดเอกสาร (`?cIsClosedBy`) | — | 🔴 |
+| `IsClosedDate` | รอ DBA | รอ DBA | วันที่ปิด (`?cIsClosedDate`) | — | 🔴 |
 | `IsComplete` | รอ DBA | รอ DBA | ค่าเริ่มต้นตอน Insert | — | 🔴 |
+| `IsCompleteBy` | รอ DBA | รอ DBA | ผู้ปิดงาน (`?cIsCompleteBy`) | — | 🔴 |
+| `IsCompleteDate` | รอ DBA | รอ DBA | วันที่ปิดงาน (`?cIsCompleteDate`) | — | 🔴 |
 | `IsCheck` | รอ DBA | รอ DBA | ค่าเริ่มต้นตอน Insert | — | 🔴 |
+| `IsCheckBy` | รอ DBA | รอ DBA | ผู้ตรวจ (`?cIsCheckBy`) | — | 🔴 |
+| `IsCheckDate` | รอ DBA | รอ DBA | วันที่ตรวจ (`?cIsCheckDate`) | — | 🔴 |
 | `Revised` | รอ DBA | รอ DBA | ค่าเริ่มต้นตอน Insert | นับรอบแก้ไขอย่างไร | 🔴 |
 | `IsAcc` | รอ DBA | ไม่ | ค่าคงที่ `0` | — | ✅ |
 | `CustCode` | รอ DBA | รอ DBA | จาก SO | FK ไปตารางลูกค้าหรือไม่ | 🟡 |

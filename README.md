@@ -105,8 +105,20 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/pull \
 | `GET /openapi.json` | OpenAPI 3.0 specification |
 | `POST /api/v1/erp/orders` | `{request_id, orders: [...]}` รูปแบบใน `examples/erp-order.json` |
 | `POST /api/v1/erp/pull` | `{request_id, query?: {...}}` ดึง ERP → map → ส่ง |
-| `POST /api/v1/erp/hooks/order-ready` | ERP แจ้ง event เพื่อปลุก SQL sweep; ไม่ใช่ข้อมูล SO เต็ม |
+| `POST /api/v1/erp/hooks/order-ready` | legacy — บันทึก event เท่านั้น ไม่ปลุก scheduled worker |
 | `POST /api/v1/erp/do-received` | รับ DO เข้า staging เพื่อตรวจสอบ; ไม่เขียนกลับ ERP |
+| `POST /api/v1/vrp/do-received` | eVRP ส่ง DO กลับมาให้ Thai Sausage รับเข้า staging; ไม่เขียนกลับ ERP |
+
+ตัวอย่าง DO callback จาก eVRP และผลลัพธ์:
+
+```sh
+curl -X POST http://127.0.0.1:8080/api/v1/vrp/do-received \
+  -H "Authorization: Bearer $THAISAUSAGE_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"receipt_id":"VRP-DO-0001","do_no":"DO-0001","status":"completed","data":{"so_no":"SO-0001"}}'
+# 202 {"receipt_id":"VRP-DO-0001","receipt_key":"eVRP:VRP-DO-0001","source":"eVRP","state":"staged","erp_write":false}
+# ส่งซ้ำ payload เดิม -> 202 พร้อม "replayed": true; payload เปลี่ยน -> 409
+```
 | `GET /api/v1/submissions/{request_id}` | สถานะที่บันทึกของการส่งจริง |
 
 ผลลัพธ์หลัก: `{request_id, state, dry_run}` และ `replayed: true` เมื่อเป็น request เดิม

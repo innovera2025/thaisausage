@@ -12,8 +12,8 @@
 และส่งไป eVRP เมื่อเปิด live mode หลังผ่านการอนุมัติและทดสอบ
 
 ```text
-ERP Webhook -> erp_hooks inbox -> SQL Server SELECT -> mapper -> submission guard -> eVRP
-ERP DO     -> do_receipts staging -------------------------------> operator review
+Schedule -> SQL Server SELECT (IsApprSo = 1) -> mapper -> submission guard -> eVRP
+eVRP DO  -> /vrp/do-received -> do_receipts staging -> operator review
 ```
 
 ## 2. Production deployment currently installed
@@ -48,7 +48,13 @@ Required application variables:
 | `ERP_SQL_WRITE_USER` / `ERP_SQL_WRITE_PASSWORD` | least-privilege DO write credential; must differ from the read-only pair |
 
 `sqlserver.approved_orders_query` is the only query used by scheduled SO sync. It must be a
-reviewed, parameter-free SELECT that filters only ERP-approved SOs.
+reviewed, parameter-free SELECT that filters only ERP-approved SOs. The application refuses to run a
+query that does not contain the `IsApprSo` predicate, and refuses any statement that is not a plain
+SELECT (INSERT, UPDATE, DELETE, MERGE, EXEC, ALTER, DROP, TRUNCATE and INTO are rejected).
+
+`config/local.json` never holds secrets; it only names environment variables. It is listed in
+`.gitignore` and `deploy/.dockerignore`, the image ships only `config/example.json`, and the real file
+is mounted read-only at runtime. `do_write.enabled` must stay `false` in every deployed release.
 
 SQL password is appended by the connector at runtime and is not stored in the base connection string.
 Use `Encrypt=yes;TrustServerCertificate=no` with a trusted certificate. Do not log the connection string.
@@ -65,6 +71,7 @@ SO verification is complete.
 | `POST /api/v1/erp/orders` | direct standard SO ingestion | validates and submits through guard |
 | `POST /api/v1/erp/pull` | legacy/configured REST pull | reads configured ERP REST endpoint |
 | `POST /api/v1/erp/do-received` | DO staging | adds `do_receipts`, never writes ERP |
+| `POST /api/v1/vrp/do-received` | eVRP DO callback | adds `do_receipts` under `source=eVRP`, never writes ERP |
 | `GET /api/v1/submissions/{request_id}` | delivery status | read-only |
 | `GET /health` | liveness | read-only |
 
@@ -96,7 +103,8 @@ The current foundation creates:
 submissions(request_id, payload_hash, state, result, created_at)
 order_claims(order_no, request_id)
 erp_hooks(event_id, event_type, source_id, company_id, order_no, changed_at, state, received_at)
-do_receipts(receipt_id, do_no, payload_hash, payload, state, received_at)
+do_receipts(receipt_key PK, source, receipt_id, do_no, payload_hash, payload, state, received_at)
+do_writes(receipt_key PK, source, receipt_id, do_no, transaction_no, payload_hash, state, reason, updated_at)
 ```
 
 The current implementation protects request/event/receipt identity and stores remote VRP references
@@ -118,6 +126,53 @@ curl -fsS https://thaisausage.krs.co.th/health
 
 Open `https://thaisausage.krs.co.th/docs` and use the OpenAPI contract.
 Authenticated operations require the internal API key. Never paste a real key into a shared screenshot.
+
+### Pre-deploy verification
+
+Run on the build machine before touching the VPS:
+
+```sh
+python3 -m unittest discover -s tests -v
+python3 -m json.tool config/example.json >/dev/null
+python3 -m json.tool docs/openapi.json >/dev/null
+git diff --check
+git status --short          # .env, deploy/vps.env and config/local.json must never appear
+```
+
+Then confirm on the VPS copy of `config/local.json`:
+
+- [ ] `dry_run` is the approved value for this release
+- [ ] `sync.enabled=false` unless the SQL sync gate has been passed
+- [ ] `do_write.enabled=false` — no release enables the ERP DO writer
+- [ ] `sqlserver.approved_orders_query` is the reviewed query filtering `IsApprSo = 1`
+- [ ] `/opt/thaisausage/.env` still has mode `600` and is outside Git
+- [ ] SQLite volume backed up (see backup command in the system manual)
+
+After `docker compose up -d`, check `/health`, `/docs`, `/openapi.json`, container logs, and post one
+mock DO to `/api/v1/vrp/do-received` expecting `202` with `erp_write: false`.
+
+### Rollback
+
+Rolling back code is safe; rolling back the database is not, because remote systems may already hold
+accepted requests.
+
+```sh
+cd /opt/thaisausage
+git log --oneline -5                     # pick the last known-good commit
+git reset --hard <known-good-commit>
+docker compose -f deploy/docker-compose.yml build
+docker compose -f deploy/docker-compose.yml up -d
+curl -fsS https://thaisausage.krs.co.th/health
+```
+
+Rules:
+
+- Keep the SQLite volume as it is. Never restore an older database to "undo" sends: `order_claims`
+  would be lost and the next cycle could submit the same SO to eVRP twice.
+- To stop outbound activity immediately, set `sync.enabled=false` and restart; staging endpoints stay up.
+- If a release is rolled back while submissions are `sending` or `needs_review`, reconcile those in eVRP
+  by business reference before enabling sync again.
+- Record the rolled-back commit, the reason and the state counts in the phase report.
 
 ### Update an image
 
@@ -147,7 +202,7 @@ Minimum checks:
 - app/Caddy container health
 - SQL connection/query latency once enabled
 - oldest queued/review hook age
-- `needs_review`, `review`, `rejected` counts
+- `needs_review`, `review`, `rejected` counts, plus scheduled-cycle states `already_sent`, `prior_attempt_needs_review` and `detail_item_code_missing`
 - SQLite volume free space and backup freshness
 - authentication failures and eVRP upstream errors
 
@@ -173,7 +228,9 @@ Operator rules:
 
 - Keep `do_write.enabled=false` on the VPS. Deploy the code with the flag off; enabling is a separate approved change.
 - The writer refuses to start if its credential environment variables reuse the read-only pair.
-- No public endpoint exposes the writer. It is an internal call only.
+- The eVRP callback calls the writer only when `do_write.enabled=true` and the payload carries a
+  `transaction_no`. Staging always answers 202; the writer outcome is reported in `do_write` and
+  `erp_write` is true only for `inserted`. The ERP-side DO path never calls the writer.
 - Writer states are recorded in `do_writes`: `preview`, `disabled`, `rejected`, `inserted`, `needs_review`.
 - `inserted` and `needs_review` are never rewritten automatically. Investigate `needs_review` in ERP by
   `TransactionNo`/`DoNo` before any manual action; a commit timeout may mean the rows already exist.

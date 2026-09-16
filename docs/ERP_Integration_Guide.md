@@ -12,6 +12,8 @@
 
 ERP เป็นแหล่งข้อมูลหลักของ SO ระบบจะอ่านข้อมูลฉบับเต็มจาก SQL Server ตาม Schedule
 Query ต้องกรองเฉพาะ SO ที่ Approve แล้วด้วย `IsApprSo = 1` และผ่านการ review จาก ERP/DBA;
+ระบบจะปฏิเสธ query ที่ไม่มีเงื่อนไข `IsApprSo = 1`, ที่เทียบ `IsApprSo` กับค่าอื่น, ที่มีเครื่องหมาย `;`,
+ที่มี comment (`--`, `/* */`) หรือที่มีคำสั่งอื่นนอกจาก SELECT ล้วน;
 ไม่ใช้ Webhook เป็นช่องทางหลัก
 
 ระหว่างการทดสอบ ระบบจะใช้ dry-run/staging เท่านั้น ไม่มีการเขียนกลับ ERP และไม่ส่ง SO จริงไป eVRP
@@ -153,12 +155,12 @@ Rules used by the local contract:
 - Maximum local batch is 100 orders and request body is 1 MiB. eVRP v1.1 supports larger limits,
   but local limits are intentionally stricter until load testing is complete.
 
-## 6. DO staging receiver
+## 6. DO callback receiver (eVRP → Thai Sausage)
 
 ### Endpoint
 
 ```http
-POST /api/v1/erp/do-received
+POST /api/v1/vrp/do-received
 ```
 
 ตัวอย่าง:
@@ -175,9 +177,13 @@ POST /api/v1/erp/do-received
 }
 ```
 
-ระบบตอบ `202` และ `erp_write: false` เมื่อบันทึก staging สำเร็จ
+eVRP เรียก endpoint นี้เมื่อสร้าง DO เสร็จแล้ว ระบบตอบ `202` เมื่อบันทึก staging สำเร็จ
+`erp_write` เป็น boolean และเป็น `true` เฉพาะเมื่อระบบเขียน DO เข้า ERP สำเร็จจริงเท่านั้น ซึ่งยังปิดอยู่ในระยะนี้
+ถ้าเปิดใช้ภายหลัง ผลการเขียนจะอยู่ในฟิลด์ `do_write` และปัญหาของ writer จะไม่ทำให้ callback กลายเป็น error
 `receipt_id` เดิมกับ payload เดิม replay ได้; payload ต่างกันจะได้ `409`
-รูปแบบ field ภายใน `data` จะยืนยันอีกครั้งหลังสำรวจ DO ของ ERP
+ในระยะนี้ Thai Sausage ไม่ส่ง DO กลับ eVRP และไม่ Insert/Update/Delete ERP
+
+Endpoint เดิม `POST /api/v1/erp/do-received` ยังเปิดไว้เพื่อ compatibility เท่านั้น ไม่ใช่เส้นหลักของ eVRP
 
 ## 7. Status and errors
 
@@ -201,23 +207,36 @@ Use a stable unique `request_id` for one immutable payload. The same ID and iden
 to replay. Reusing an ID with changed data is a conflict. `order_no` also cannot be reused under another
 request while its previous claim exists.
 
-For webhook delivery, ERP should retry network failures and non-2xx responses with the same `event_id`.
-Recommended delays are 30 seconds, 2 minutes and 10 minutes, with an operator review after the limit.
-The receiver is idempotent, but the ERP must keep its event log and not generate a new event ID for every retry.
+The scheduled flow needs no retry from ERP: an approved SO that is not picked up in one cycle is read again
+in the next cycle, and an SO already claimed is skipped instead of being sent twice.
+If the legacy webhook is still used, retry the same `event_id` after 30 seconds, 2 minutes and 10 minutes,
+then hand it to an operator. The receiver is idempotent; never invent a new event ID per retry.
 
 ## 9. ERP implementation checklist
 
 - [ ] Store `THAISAUSAGE_API_KEY` in the ERP secret store.
-- [ ] Send webhook only after the agreed SO-ready transition is committed in ERP.
-- [ ] Use a stable `event_id`; retry the same body on transport failure.
-- [ ] Provide `order_no`, `company_id` and `changed_at` whenever available.
-- [ ] Keep ERP as the source of complete SO data; do not put full SO data in the hook.
+- [ ] Confirm the reviewed `approved_orders_query` filters `IsApprSo = 1` and returns every field the mapping needs.
+- [ ] Make sure an approved SO stays readable until the scheduled worker has picked it up.
+- [ ] Keep ERP as the source of complete SO data; Thai Sausage reads it, ERP does not push it.
+- [ ] Legacy webhook only: use a stable `event_id` and retry the same body on transport failure.
 - [ ] Confirm the SQL Server service account can read only approved views/tables.
 - [ ] Provide sample SOs for COD, credit, free item, multiple lines and changed detail.
 - [ ] Do not expect DO receiver to update ERP until a separate write contract is approved.
 - [ ] Test against the deployed Domain using mock/staging data first.
 
 ## 10. Test examples
+
+DO callback ที่ eVRP เรียกเข้ามา (ใช้ทดสอบ staging ได้):
+
+```sh
+curl -X POST https://thaisausage.krs.co.th/api/v1/vrp/do-received \
+  -H 'Authorization: Bearer <THAISAUSAGE_API_KEY>' \
+  -H 'Content-Type: application/json' \
+  -d '{"receipt_id":"VRP-DO-TEST-001","do_no":"DO-TEST-001","status":"completed"}'
+# 202 {"receipt_id":"VRP-DO-TEST-001","receipt_key":"eVRP:VRP-DO-TEST-001","source":"eVRP","state":"staged","erp_write":false}
+```
+
+Legacy webhook (ไม่ใช้ใน flow ปัจจุบัน):
 
 ```sh
 curl -X POST https://thaisausage.krs.co.th/api/v1/erp/hooks/order-ready \

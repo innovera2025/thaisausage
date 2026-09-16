@@ -1,10 +1,10 @@
 # คู่มือระบบ Thaisausage ERP Integration
 
-Document version: 1.1.0  
-Date: 14 September 2026  
-Audience: ทีม IT / Operations, ทีม ERP และนักพัฒนาที่ดูแลระบบ  
-Code baseline: working tree ณ วันที่ 14 กันยายน 2026; การเปลี่ยนแปลงที่ยังไม่ commit ต้องถูก review และนำเข้าระบบ release ก่อนใช้งานจริง
-Production domain: `https://thaisausage.krs.co.th`
+- Document version: 1.1.0
+- Date: 16 September 2026
+- Audience: ทีม IT / Operations, ทีม ERP และนักพัฒนาที่ดูแลระบบ
+- Code baseline: working tree ณ วันที่ 16 กันยายน 2026 (commit ล่าสุด `7ce9101` บวกงาน DO callback ที่ยังไม่ commit)
+- Production domain: `https://thaisausage.krs.co.th`
 
 คู่มือนี้รวมข้อมูลจากการตรวจสอบโค้ดจริงทั้งหมดไว้ในเล่มเดียว ตั้งแต่การติดตั้ง การตั้งค่า API การ Deploy การดูแลประจำวัน ไปจนถึงผลการตรวจสอบโปรเจคและข้อจำกัดที่ต้องแก้ก่อนใช้งานจริง หากข้อความในเอกสารอื่นขัดกับคู่มือนี้ ให้ยึดตามโค้ดและคู่มือนี้ (ดูหัวข้อ 14.3)
 
@@ -13,13 +13,13 @@ Production domain: `https://thaisausage.krs.co.th`
 Thaisausage เป็น middleware ที่คั่นกลางระหว่าง ERP กับ eVRP ERP แจ้งว่ามี Sales Order (SO) พร้อมส่ง ระบบจะอ่าน SO ฉบับเต็ม ตรวจความถูกต้อง กันการส่งซ้ำด้วย SQLite แล้วส่งต่อไปยัง eVRP (`POST /v1/orders/import`) นอกจากนี้ระบบยังมีจุดรับ DO เข้าพื้นที่ staging เพื่อตรวจสอบ โดยจะไม่เขียนข้อมูลกลับ ERP
 
 ```text
-ERP SQL Server <-- SELECT-only approved_orders_query (scheduled) --> map --> validate --+
+ERP SQL Server <-- SELECT-only approved_orders_query (scheduled, IsApprSo = 1) --> map --> validate --+
 ERP JSON ------> /erp/orders ----------------------------> validate --+
 ERP REST <-GET-- /erp/pull --------------------> map --> validate ----+
                                                                       v
                                      submission guard (SQLite submissions + order_claims) --> eVRP
 
-ERP DO --------> /erp/do-received --> do_receipts (staged, never written back to ERP)
+eVRP DO -------> /vrp/do-received --> do_receipts (staged, never written back to ERP)
 ```
 
 หลักการสำคัญ:
@@ -29,17 +29,18 @@ ERP DO --------> /erp/do-received --> do_receipts (staged, never written back to
 - เมื่อ `dry_run=true` ระบบจะตรวจและคืน payload แต่ไม่ส่ง eVRP และไม่บันทึกการจอง request/order
 - ระบบไม่ resend อัตโนมัติ ถ้าผลลัพธ์ไม่แน่นอน รายการจะเป็น `needs_review` และต้องให้คนตรวจ
 
-## 2. สถานะปัจจุบัน (14 ก.ย. 2026)
+## 2. สถานะปัจจุบัน (16 ก.ย. 2026)
 
 | ความสามารถ | มีในโค้ด | พร้อมใช้งานจริง |
 |---|---|---|
-| รับ webhook SO (`/erp/hooks/order-ready`) | มี | ใช่ — บันทึก trigger ได้ |
+| รับ webhook SO (`/erp/hooks/order-ready`) | มี | legacy — บันทึก event ได้ แต่ไม่ใช่เส้นทางหลักและไม่ปลุก worker |
 | ส่ง SO แบบ JSON ตรง (`/erp/orders`) | มี | dry-run เท่านั้น จนกว่าจะผ่าน eVRP UAT |
 | ดึง SO จาก ERP REST (`/erp/pull`) | มี | ต้องตั้ง `erp.base_url` และ `ERP_TOKEN` ก่อน |
 | SQL Server connector | มีโค้ด | ยังรอ query/mapping ที่อนุมัติจาก ERP |
 | Sweep worker แบบ scheduled approved-SO | มี | ปิดอยู่ (`sync.enabled=false`) |
-| DO staging (`/erp/do-received`) | มี | ใช่ — staging เท่านั้น |
-| DO writer เข้า `tbl_DOhdr`/`tbl_Dodtl` | มีโครงแล้ว (16 ก.ย.) | ไม่ — ปิดอยู่ (`do_write.enabled=false`) และยังไม่มี mapping จาก DBA |
+| รับ DO จาก eVRP (`/vrp/do-received`) | มี | ใช่ — staging เท่านั้น |
+| DO staging เดิม (`/erp/do-received`) | มี | ใช่ — เก็บไว้เพื่อ compatibility |
+| DO writer เข้า `tbl_DOhdr`/`tbl_Dodtl` | มีและต่อเข้ากับ callback แล้ว | ไม่ — ปิดอยู่ (`do_write.enabled=false`) และยังไม่มี mapping จาก DBA |
 | ส่งข้อมูลจริงไป eVRP | มี connector | ยังไม่ผ่าน UAT |
 | Swagger UI / OpenAPI | มี | ใช่ |
 | COD callback, เขียนกลับ ERP, retry worker, outbox, API ปลด/แก้ SO | ไม่มี | — |
@@ -112,14 +113,18 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/orders \
 
 ## 6. การตั้งค่า `config/local.json`
 
+ระบบใช้ไฟล์สองชั้นแยกกันเสมอ: `.env` เก็บ secret อย่างเดียว ส่วน `config/local.json` เก็บพฤติกรรมของระบบและห้ามมี secret เด็ดขาด (ใส่ได้แค่ *ชื่อ* ตัวแปร environment) ทั้งสองไฟล์อยู่ใน `.gitignore` และ `deploy/.dockerignore` ส่วน Docker image คัดลอกเฉพาะ `config/example.json` ขณะที่ `config/local.json` ถูก mount แบบ read-only ตอนรัน
+
+บน VPS ต้องมีอย่างน้อย: `.env` → `THAISAUSAGE_API_KEY`, `VRP_TOKEN`, `ERP_SQLSERVER_CONNECTION_STRING`, `ERP_SQL_USER`, `ERP_SQL_PASSWORD` และ `config/local.json` → `dry_run`, `sync.enabled`, `sync.interval_seconds`, `sqlserver.approved_orders_query`, `sqlserver.field_map`, `sqlserver.item_field_map`, `do_write.enabled` (ต้องเป็น `false`) พร้อม mapping ของ `do_write`
+
 | Key | ค่าเริ่มต้นใน example | ความหมาย |
 |---|---|---|
 | `host`, `port` | `0.0.0.0`, `8080` | address ที่ HTTP server รอรับ |
 | `database` | `data/integration.sqlite3` | ไฟล์ SQLite (path สัมพัทธ์กับ working directory) |
 | `api_key_env` | `THAISAUSAGE_API_KEY` | ชื่อตัวแปรที่เก็บ API key |
 | `dry_run` | `true` | ต้องเป็น boolean เท่านั้น `false` คือส่งจริง |
-| `sync.enabled` | `false` | เปิดหรือปิด SQL sweep |
-| `sync.interval_seconds` | `60` | รอบ sweep สำรองในกรณีที่ไม่มี webhook มาปลุก |
+| `sync.enabled` | `false` | เปิดหรือปิด scheduled worker ที่ดึง SO ที่อนุมัติแล้ว |
+| `sync.interval_seconds` | `60` | รอบการทำงานของ scheduled worker |
 | `vrp.base_url` | `https://vrp.oneplatformth.com/api` | ต้องเป็น HTTPS |
 | `vrp.token_env`, `vrp.timeout_seconds` | `VRP_TOKEN`, `30` | token และ timeout ของ eVRP |
 | `erp.base_url`, `orders_path` | ว่าง, `/api/orders` | ERP REST สำหรับ `/erp/pull` |
@@ -129,7 +134,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/orders \
 | `sqlserver.connection_string_env`, `username_env`, `password_env` | ชื่อตามหัวข้อ 5 | ชื่อตัวแปร secret |
 | `sqlserver.auth_mode` | `sql` | `sql` หรือ `integrated` (Trusted_Connection) |
 | `sqlserver.connect_timeout_seconds`, `query_timeout_seconds` | `10`, `30` | timeout ของ ODBC |
-| `sqlserver.approved_orders_query` | ว่าง | SELECT ที่ผ่านการ review แล้ว ต้องมีเงื่อนไข `IsApprSo = 1` |
+| `sqlserver.approved_orders_query` | ว่าง | SELECT ที่ผ่านการ review แล้ว ต้องมีคำว่า `IsApprSo` (เช่น `WHERE IsApprSo = 1`) มิฉะนั้นระบบปฏิเสธก่อนเชื่อมต่อ |
 | `sqlserver.order_key` | `order_no` | ชื่อคอลัมน์ที่ใช้จัดกลุ่มแถวเป็น SO |
 | `sqlserver.field_map`, `item_field_map` | ว่าง | map คอลัมน์ SQL ไปเป็น standard JSON |
 | `do_write.enabled` | `false` | เปิดการเขียน DO เข้า ERP ห้ามเปิดจนกว่าจะผ่าน UAT และ sign-off |
@@ -168,10 +173,10 @@ Content-Type: application/json
 | `GET /health` | ไม่ต้อง | 200 | `{status, dry_run}` ตรวจแค่ว่า process ทำงานอยู่ ไม่ได้ตรวจ SQL หรือ eVRP |
 | `GET /docs` | ไม่ต้อง | 200 | Swagger UI (โหลดไฟล์จาก unpkg.com) |
 | `GET /openapi.json` | ไม่ต้อง | 200 | OpenAPI contract |
-| `POST /api/v1/erp/hooks/order-ready` | ต้อง | 202 | บันทึก event และปลุก sweep worker |
+| `POST /api/v1/erp/hooks/order-ready` | ต้อง | 202 | legacy — บันทึก event ลง `erp_hooks` เท่านั้น ไม่ปลุก scheduled worker และไม่ใช่เส้นทางหลัก |
 | `POST /api/v1/erp/orders` | ต้อง | 200/202 | รับ standard SO JSON แล้ว validate และส่งต่อ |
 | `POST /api/v1/erp/pull` | ต้อง | 200/202 | ดึง ERP REST หนึ่งครั้ง แล้ว map, validate และส่งต่อ |
-| `POST /api/v1/erp/do-received` | ต้อง | 202 | เก็บ DO เข้า staging |
+| `POST /api/v1/vrp/do-received` | ต้อง | 202 | eVRP ส่ง DO เข้า staging |
 | `GET /api/v1/submissions/{request_id}` | ต้อง | 200/404 | ผลที่บันทึกไว้ของการส่งจริง |
 
 ### 7.3 Webhook: `POST /api/v1/erp/hooks/order-ready`
@@ -237,9 +242,44 @@ Field ที่ระบบยังไม่ validate ได้แก่ `custo
 
 `query` ต้องเป็น object ที่มีแต่ค่า scalar ระบบจะแปลงเป็น query string แล้ว GET ไป `erp.orders_path` หนึ่งครั้ง ไม่มีการไล่หน้าอัตโนมัติ ถ้าไม่มีรายการจะตอบ `200 {state: "empty"}` ถ้ามีรายการระบบจะทำงานเหมือน `/erp/orders` ถ้าเรียก ERP ไม่สำเร็จจะได้ 502 ข้อควรระวังคือแม้อยู่ใน dry-run ระบบก็ยังเรียก ERP จริง
 
-### 7.6 DO staging: `POST /api/v1/erp/do-received`
+### 7.6 DO callback: `POST /api/v1/vrp/do-received`
 
-ต้องมี `receipt_id` หรือ `do_no` (ยาวไม่เกิน 120) ระบบเก็บ payload เต็มพร้อม hash แล้วตอบ `202 {receipt_id, state: "staged", erp_write: false}` ถ้าส่ง receipt เดิมพร้อม payload เดิมจะได้ `replayed: true` ถ้า payload ต่างกันจะได้ 409 รูปแบบของ field ภายใน `data` ยังรอผลสำรวจจาก ERP
+eVRP เรียก endpoint นี้เมื่อสร้าง DO เสร็จแล้ว ระบบจะตรวจสอบ `receipt_id`/`do_no`, บันทึก payload ลง `do_receipts` และตอบ `202`. การรับซ้ำด้วยข้อมูลเดิมเป็น replay ที่ปลอดภัย ส่วนข้อมูลเดิมแต่ payload เปลี่ยนจะตอบ `409`.
+
+การรับ DO ในระยะนี้เป็น staging เท่านั้น ไม่ส่งกลับ eVRP และไม่ Insert/Update/Delete ERP. ตัวเขียน `tbl_DOhdr`/`tbl_Dodtl` จะถูกเปิดได้เฉพาะหลังผ่าน UAT และได้รับอนุมัติแยกต่างหาก โดยใช้ `do_write.enabled=true` และ credential สำหรับเขียนคนละชุดกับบัญชีอ่าน SO.
+
+ต้องมี `receipt_id` หรือ `do_no` (ยาวไม่เกิน 120) ระบบเก็บ payload เต็มพร้อม hash แล้วตอบ `202` รูปแบบของ field ภายใน `data` ยังรอผลสำรวจจาก ERP
+
+ตัวอย่าง request:
+
+```json
+{"receipt_id": "VRP-DO-0001", "do_no": "DO-0001", "status": "completed",
+ "data": {"so_no": "SO-0001", "delivered_at": "2026-09-16T12:00:00+07:00"}}
+```
+
+ตัวอย่าง response ครั้งแรกและตอนส่งซ้ำ:
+
+```json
+{"receipt_id": "VRP-DO-0001", "receipt_key": "eVRP:VRP-DO-0001", "source": "eVRP", "state": "staged", "erp_write": false}
+{"receipt_id": "VRP-DO-0001", "receipt_key": "eVRP:VRP-DO-0001", "source": "eVRP", "state": "staged", "erp_write": false, "replayed": true}
+```
+
+เมื่อเปิด `do_write.enabled=true` และ payload มี `transaction_no` ระบบจะพยายามเขียน `tbl_DOhdr`/`tbl_Dodtl` ต่อทันทีหลัง staging แล้วรายงานผลในฟิลด์ `do_write`
+หลักการสำคัญคือ **staging ที่สำเร็จตอบ `202` เสมอ** ปัญหาของ writer ไม่เปลี่ยน HTTP status และ `erp_write` เป็น boolean ที่เป็น `true` เฉพาะตอน `do_write.state = inserted` เท่านั้น
+
+| `do_write.state` | ความหมาย | `erp_write` |
+|---|---|---|
+| `inserted` | เขียน Header/Detail สำเร็จและ commit แล้ว | `true` |
+| `disabled` | `do_write.enabled=false` | `false` |
+| `skipped` | ไม่มี `transaction_no` ใน payload จึงไม่เรียก writer | `false` |
+| `rejected` | mapping/ข้อมูลไม่ผ่าน validate ไม่มี SQL ถูกส่ง | `false` |
+| `conflict` | `do_no` หรือ `transaction_no` ถูกใช้โดย receipt อื่น | `false` |
+| `needs_review` | ผลไม่แน่นอน เช่น timeout ระหว่าง commit | `false` |
+
+`source` เป็น `eVRP` เมื่อเข้าทาง `/api/v1/vrp/do-received` และเป็น `erp` เมื่อเข้าทาง endpoint เดิม (เส้นทาง ERP ไม่เรียก writer เลย)
+identity ที่ใช้จริงคือ `receipt_key = "<source>:<receipt_id>"` ดังนั้น receipt เลขเดียวกันจากสองช่องทางจะไม่ชนกัน
+การรับซ้ำจอง identity ภายใน transaction เดียว (`BEGIN IMMEDIATE`) callback ที่มาพร้อมกันจึงได้ `202` พร้อม `replayed: true` ไม่ใช่ 500
+eVRP ต้องใช้ `receipt_id` เดิมทุกครั้งที่ส่ง DO ใบเดิมซ้ำ
 
 endpoint นี้ไม่เขียน ERP ไม่ว่ากรณีใด การเขียน DO เข้า ERP เป็นงานแยกที่ต้องเรียกภายในเท่านั้น (ดูหัวข้อ 9.1) และยังไม่มี endpoint สาธารณะ
 
@@ -272,22 +312,26 @@ endpoint นี้คืนผลที่บันทึกไว้ใน SQLi
 | `review` | hook | sweep ไม่พบ SO หรือเกิด error (ระบบไม่ได้เก็บเหตุผลไว้ ดู F6) |
 | `staged` | DO | เก็บเข้า staging แล้ว |
 
-## 8. การทำงานของ sweep worker
+## 8. การทำงานของ scheduled worker
 
 thread `sql-sweep` เริ่มพร้อม HTTP server และทำงานเป็นรอบดังนี้:
 
-- รอจนครบ `sync.interval_seconds` หรือจนกว่าจะมี webhook ใหม่มาปลุก ซึ่งจะตื่นทันที
-- ถ้า `sync.enabled=false` ระบบข้ามรอบนั้นไป ปิดอยู่ก็ยังรับ webhook ได้ตามปกติ
-- ระบบดึง hook ที่มีสถานะ `received` เรียงตามเวลาที่รับ ครั้งละไม่เกิน 100 รายการ
-- ทุก Schedule เรียก `approved_orders_query` โดยไม่รับ SQL จาก HTTP และส่งเฉพาะ SO ที่ query กรองว่า Approve แล้ว
-- ถ้าพบ ระบบจะส่งเข้า submission guard ด้วย `request_id = "HOOK-" + event_id[:110]` แล้วอัปเดตสถานะ hook ตามผล
-- error ใดๆ ใน hook นั้นจะทำให้ hook เป็น `review` ส่วน error ระดับทั้งรอบจะถูกกลืนเงียบๆ และไม่มี log
+- รอจนครบ `sync.interval_seconds` แล้วทำงานหนึ่งรอบ ไม่มีสิ่งใดมาปลุกก่อนกำหนด (hook ไม่ปลุก worker แล้ว)
+- ถ้า `sync.enabled=false` ระบบข้ามรอบนั้นไป แต่ HTTP API ยังทำงานตามปกติ
+- เรียก `sqlserver.approved_orders_query` ที่ผ่านการ review แบบ SELECT-only ไม่มีพารามิเตอร์ และไม่รับ SQL จาก HTTP
+- query ต้องกรองเฉพาะ SO ที่อนุมัติแล้ว (`IsApprSo = 1`) ระบบเชื่อผลลัพธ์ของ query นี้ จึงไม่มีตัวกรองซ้ำในโค้ด
+- แต่ละ SO ใช้ `request_id = "SCHEDULE-" + sha256(order_no)[:32]` แล้วผ่าน submission guard เดียวกับ endpoint อื่น
+- SO ที่ส่งสำเร็จแล้วได้ `skipped` เหตุผล `already_sent`; SO ที่ครั้งก่อนค้างที่ `sending`/`needs_review` จะได้ `needs_review` เหตุผล `prior_attempt_*` และระบบไม่ส่งซ้ำให้เอง
+- SO ที่มีบรรทัดสินค้าไม่มี `item_code` จะได้ `review` เหตุผล `detail_item_code_missing` และไม่ถูกส่งทั้งใบ
+- ถ้าอ่าน query ทั้งชุดไม่ได้ (เช่นแถวไม่มี order key) รอบนั้นคืนผลเดียวเป็น `review` โดยไม่โยน exception ออกไป
+- แต่ละ SO ถูกแยกจากกัน ถ้ารายการใดพังจะได้ `review` พร้อมเหตุผลและเขียน log แบบ redact ส่วนรายการที่เหลือยังส่งต่อได้ตามปกติ
+- แถวที่ไม่มี `order_no` จะได้ `review` เหตุผล `order_no_missing` โดยไม่พยายามส่ง
 
 พฤติกรรมที่ผู้ดูแลต้องรู้:
 
-- ถ้า `order_no` เดิมถูกส่งไปแล้ว event `sales_order.changed` จะชนการจอง order_no และกลายเป็น `review` ในกรณีนี้ต้องแก้ไข SO ที่ eVRP ด้วยมือ เพราะยังไม่มี contract สำหรับ update หรือ cancel
-- ถ้ามี hook ค้างเกิน 100 รายการ ระบบจะเก็บกวาดรอบละ 100 ต่อหนึ่งการปลุกหรือหนึ่ง interval
-- เปิด `sync.enabled=true` ใน `dry_run=true` ได้เฉพาะกับ SO ที่ได้รับอนุมัติ เพราะระบบจะ preview และคง Hook เป็น `received` พร้อม reason `dry_run_preview`; ก่อน live ต้องตรวจ mapping ให้เสร็จ (ดู F2)
+- เมื่อ `dry_run=true` ระบบจะ validate และ preview เท่านั้น ผลลัพธ์เป็น `preview` เหตุผล `dry_run_preview` ไม่มีการส่ง eVRP และไม่มีการจอง `order_no`
+- SO ที่ส่งไปแล้วและถูกแก้ไขภายหลังจะชนการจอง `order_no` กลายเป็น `review` ต้องแก้ที่ eVRP ด้วยมือ เพราะยังไม่มี contract สำหรับ update หรือ cancel
+- `erp_hooks` และ `sweep_hooks` ยังอยู่ในโค้ดเพื่อ compatibility แต่ไม่ได้ถูกเรียกจาก worker ปัจจุบัน
 
 ## 9. SQL Server connector
 
@@ -297,12 +341,21 @@ thread `sql-sweep` เริ่มพร้อม HTTP server และทำง
 DRIVER={ODBC Driver 18 for SQL Server};SERVER=erp-db.example,1433;DATABASE=ERP;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=10
 ```
 
-SELECT guard ใน `select_approved` ยอมรับเฉพาะคำสั่งที่ขึ้นต้นด้วย `SELECT` และปฏิเสธคำว่า INSERT, UPDATE, DELETE, MERGE, EXEC, EXECUTE, ALTER, DROP, TRUNCATE และ INTO guard นี้ตรวจเพียงข้อความ ไม่ใช่กลไกความปลอดภัยหลัก บัญชี SQL จึงต้องมีสิทธิ์ SELECT เฉพาะ view ที่อนุมัติเท่านั้น (ดู F11)
+ก่อนเปิด connection ทุกครั้ง ระบบบังคับสัญญาของ query ดังนี้ (ตรวจด้วยข้อความ ไม่ใช่ SQL parser จึงเลือกปฏิเสธไว้ก่อนเมื่อไม่มั่นใจ):
+
+- ต้องเป็นคำสั่งเดียว ห้ามมี `;`
+- ห้ามมี comment `--` หรือ `/* */` เพื่อไม่ให้ซ่อนเงื่อนไข
+- ต้องขึ้นต้นด้วย `SELECT` และห้ามมีคำว่า INSERT, UPDATE, DELETE, MERGE, EXEC, ALTER, DROP, CREATE, TRUNCATE, GRANT, REVOKE, DENY, BACKUP, RESTORE, WAITFOR, BULK, OPENROWSET, OPENQUERY, OPENDATASOURCE หรือ INTO
+- เฉพาะ `approved_orders_query` ต้องมีเงื่อนไข `IsApprSo = 1` ที่มองเห็นได้ และห้ามเทียบ `IsApprSo` กับค่าอื่น เช่น `= 0`, `<> 1` หรือ `>= 1`
+- ถ้า view กรอง approved ไว้แล้ว ก็ยังต้องเขียน `IsApprSo = 1` ใน query เพื่อให้ตรวจสอบได้จากไฟล์ config
+
+
+guard นี้ตรวจข้อความ ไม่ใช่กลไกความปลอดภัยหลัก บัญชี SQL จึงยังต้องมีสิทธิ์ SELECT เฉพาะ view ที่อนุมัติเท่านั้น (ดู F11)
 
 การแปลงแถว SQL เป็น SO:
 
 - แถวผลลัพธ์จะถูกจัดกลุ่มตามคอลัมน์ `order_key` โดยใช้แถวแรกของกลุ่ม map header ด้วย `field_map`
-- ทุกแถวถูก map ด้วย `item_field_map` และรวมเป็นรายการสินค้าเมื่อ `item_code` ไม่เป็น null
+- ทุกแถวถูก map ด้วย `item_field_map`; ถ้าบรรทัดใดไม่มี `item_code` ที่ใช้ได้ ทั้ง SO จะถูกทำเครื่องหมาย `rejected_reason = detail_item_code_missing` และ scheduler จะไม่ส่งใบนั้น
 - ชื่อคอลัมน์ต้องไม่มีจุด เพราะจุดใช้แบ่ง path ให้ตั้ง alias ใน SQL แทน
 - connector จะแปลง `date`/`datetime` เป็น ISO string และ `Decimal` เป็นตัวเลข JSON ให้ตรง contract; ยังต้องยืนยันผลกับ SQL จริงแบบ read-only (ดู F3)
 
@@ -357,8 +410,8 @@ docker compose -f deploy/docker-compose.yml exec thaisausage python -c "import j
 submissions(request_id PK, payload_hash, state, result JSON, created_at)
 order_claims(order_no PK, request_id)
 erp_hooks(event_id PK, event_type, source_id, company_id, order_no, changed_at, state, received_at)
-do_receipts(receipt_id PK, do_no, payload_hash, payload, state, received_at)
-do_writes(receipt_id PK, do_no UNIQUE, transaction_no UNIQUE, payload_hash, state, reason, updated_at)
+do_receipts(receipt_key PK, source, receipt_id, do_no, payload_hash, payload, state, received_at)
+do_writes(receipt_key PK, source, receipt_id, do_no UNIQUE, transaction_no UNIQUE, payload_hash, state, reason, updated_at)
 ```
 
 ใน container ไฟล์ฐานข้อมูลอยู่ที่ `/app/data/integration.sqlite3` บน volume `thaisausage-data` ตาราง `submissions` เก็บเฉพาะ hash, สถานะ และเลขอ้างอิงจาก eVRP ไม่ได้เก็บ payload เต็ม ต้นฉบับจึงต้องเก็บไว้ที่ ERP เพื่อใช้ reconcile
@@ -391,6 +444,7 @@ docker compose -f deploy/docker-compose.yml cp thaisausage:/tmp/backup.sqlite3 .
 
 - DNS A record ของ `thaisausage.krs.co.th` ต้องชี้มาที่ VPS และพอร์ต 80/443 ต้องเปิดเพื่อให้ออก certificate ได้
 - image ถูก build สำหรับ amd64 เพราะ repo ของ Microsoft ระบุ `arch=amd64` ไว้ตายตัว
+- build context คือ root ของ repo จึงต้องใช้ `.dockerignore` ที่ root เท่านั้น (ไฟล์ใน `deploy/` ไม่มีผล) ไฟล์นี้กัน `.env`, `config/local.json`, `deploy/vps.env`, `data/`, `tests/`, `process/` และ PDF ไม่ให้เข้า build context
 - ต้องมี `/opt/thaisausage/.env` (permission 600) และ `config/local.json` บน VPS
 
 Deploy ครั้งแรกหรืออัปเดต:
@@ -450,7 +504,7 @@ curl -fsS https://thaisausage.krs.co.th/health
 python3 -m unittest discover -s tests -v
 ```
 
-ผลวันที่ 16 ก.ย. 2026: ผ่าน 63 จาก 63 test ครอบคลุม HTTP auth, validation, idempotency, การส่งซ้ำพร้อมกัน, timeout, DO staging, hook, credential ของ SQL และชุดทดสอบ DO writer (parameter binding, transaction, rollback, duplicate, dry-run และ flag ปิด) ทุก test ใช้ mock โดยไม่เรียก ERP หรือ eVRP จริง และไม่มี INSERT เข้า ERP เกิดขึ้น
+ผลวันที่ 16 ก.ย. 2026: ผ่าน 94 จาก 94 test ครอบคลุม HTTP auth, validation, idempotency, การส่งซ้ำพร้อมกัน, timeout, DO staging, hook, credential ของ SQL และชุดทดสอบ DO writer (parameter binding, transaction, rollback, duplicate, dry-run และ flag ปิด) ทุก test ใช้ mock โดยไม่เรียก ERP หรือ eVRP จริง และไม่มี INSERT เข้า ERP เกิดขึ้น
 
 ส่วนที่ยังไม่มี test เชื่อม SQL Server จริงคือ connection/query กับ schema ของ ERP; มี unit test สำหรับ `_group_rows` และชนิดข้อมูล `Decimal`/`date` แล้ว แต่ยังต้องทำ read-only verification กับ SO ที่อนุมัติ
 
@@ -470,7 +524,16 @@ python3 -m unittest discover -s tests -v
 | F8 | ต่ำ | config หลาย key ไม่มีผลกับการทำงาน | `config/example.json` | ทำให้เข้าใจผิดว่ามีการควบคุม เช่น `encrypt` หรือ `approved_objects` | implement การตรวจ หรือทำเครื่องหมายว่ายังไม่ใช้ |
 | F9 | ต่ำ | โค้ดและเอกสารยังไม่ commit | `api.py`, `__main__.py`, `docs/` | production ต่างจาก repo และเอกสารยังไม่อยู่ใน Git | review แล้ว commit และ deploy |
 | F10 | ต่ำ | Swagger โหลดจาก unpkg | `api.py` | แก้แล้ว: pin เป็น `5.32.15`; ยังควรพิจารณา vendor asset/SRI ใน hardening รอบถัดไป |
-| F11 | ต่ำ | SELECT guard เป็นการตรวจข้อความ | `sqlserver.py` (`select_approved`) | แก้แล้ว: ปฏิเสธ `INTO` เพิ่มเติม และยังต้องพึ่งสิทธิ์ read-only ของ DB |
+| F11 | ต่ำ | SELECT guard เป็นการตรวจข้อความ | `sqlserver.py` (`select_approved`) | แก้แล้ว: บังคับคำสั่งเดียว ห้าม `;`/comment และเพิ่ม CREATE/GRANT/REVOKE/DENY/BACKUP/RESTORE/WAITFOR/BULK/OPENROWSET; ยังต้องพึ่งสิทธิ์ read-only ของ DB |
+| R1 | สูง | guard เดิมยอมให้มีหลาย statement ต่อท้าย SELECT | `sqlserver.py` | แก้แล้ว: ปฏิเสธ `;` และ comment พร้อม regression test |
+| R2 | สูง | guard `IsApprSo` ตรวจแค่ว่ามีคำนี้ | `sqlserver.py` | แก้แล้ว: ต้องมี `IsApprSo = 1` และห้ามเทียบกับค่าอื่น |
+| R3 | สูง | detail ที่ไม่มี `item_code` ถูกทิ้งเงียบ | `sqlserver.py` | แก้แล้ว: ทั้ง SO เป็น `review/detail_item_code_missing` |
+| R4 | สูง | SO ที่ค้าง `needs_review` ถูกข้ามเงียบทุกรอบ | `service.py` | แก้แล้ว: รายงาน `needs_review/prior_attempt_*` และไม่ส่งซ้ำอัตโนมัติ |
+| R5 | สูง | log อาจพ่นข้อความ driver และ `order_no` ดิบ | `__main__.py`, `service.py` | แก้แล้ว: log เฉพาะ class name, นับ state และ sanitize identifier |
+| R6 | กลาง | isolation ไม่ครอบขั้นอ่าน/map | `service.py` | แก้แล้ว: batch ที่อ่านไม่ได้คืนผล `review` แทนการโยน exception |
+| R7 | กลาง | DO callback พร้อมกันได้ HTTP 500 | `service.py` | แก้แล้ว: จอง identity ใน `BEGIN IMMEDIATE` และมี concurrent test |
+| R8 | กลาง | ERP/eVRP ใช้ `receipt_id` ชนกัน | `service.py`, `api.py` | แก้แล้ว: identity เป็น `<source>:<receipt_id>` พร้อม migration |
+| R9 | กลาง | `.dockerignore` อยู่ผิดตำแหน่ง | `.dockerignore` | แก้แล้ว: ย้ายไป root และพิสูจน์ด้วย docker build context check |
 
 ### 14.2 จุดแข็งที่พบ
 

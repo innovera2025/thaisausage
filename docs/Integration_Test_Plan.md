@@ -16,7 +16,8 @@
 | ERP → Thaisausage | direct SO / DO receipt; legacy webhook retained | Yes | SQLite submission/staging only |
 | Thaisausage → ERP | HTTP response to ERP caller | Yes | response only; no ERP write-back |
 | ERP SQL → Thaisausage | approved SO SELECT | Yes | SELECT-only |
-| Thaisausage → eVRP | mapped SO submission | realtime worker/mock first | no real eVRP request in dry-run |
+| Thaisausage → eVRP | mapped SO submission | scheduled worker/mock first | no real eVRP request in dry-run |
+| eVRP → Thaisausage | DO callback to `/api/v1/vrp/do-received` | Yes | SQLite staging only; never writes ERP |
 | eVRP → Thaisausage | response/status | mock/UAT | submission state and reference |
 | Thaisausage → ERP | asynchronous callback | Not available | separate future contract |
 
@@ -39,7 +40,9 @@
 - [ ] Approved SQL query, field mapping and approved SO list are recorded.
 - [ ] Test owner, observer and rollback contact are available.
 - [ ] eVRP test URL/token and test master data are available before eVRP UAT.
-- [ ] Realtime worker is enabled in the test environment; schedule is recovery-only.
+- [ ] Scheduled worker is the only SO trigger; `sync.interval_seconds` is agreed for the test window.
+- [ ] `sqlserver.approved_orders_query` is reviewed and filters `IsApprSo = 1`; the app refuses a query without that predicate.
+- [ ] `do_write.enabled=false` is confirmed on the environment under test.
 
 ## 5. ERP → Thaisausage test cases
 
@@ -60,6 +63,36 @@
 | ERP-13 | Network retry | timeout/disconnect then retry same body | same identity; reconcile review state | IDs/state |
 
 | ERP-14 | Scheduled approved SO | run the schedule with a reviewed query | only approved SOs are selected; no Hook required | timestamps/query result |
+| ERP-15 | Unapproved SO excluded | include an SO with `IsApprSo <> 1` in the source data | the SO is never selected and never reaches eVRP | query result/submission list |
+| ERP-16 | Query guard | configure a query without the `IsApprSo` predicate | startup/sweep refuses with a contract error; no SQL executed | error message |
+| ERP-17 | Sync disabled | set `sync.enabled=false` and wait two intervals | no SQL query runs and no SO is sent | worker log/query trace |
+| ERP-18 | Dry-run schedule | `dry_run=true` with an approved SO | result `preview`; no eVRP call and no `order_claims` row | state/database |
+| ERP-19 | Duplicate protection | run two cycles over the same approved SO | second cycle reports `skipped`/`already_sent` | submission/claim rows |
+| ERP-21 | Unresolved attempt | force `needs_review`, then run another cycle | second cycle reports `needs_review`/`prior_attempt_needs_review` and does not resend | states/upstream calls |
+| ERP-22 | Incomplete detail | approved SO whose detail row has no item code | SO becomes `review`/`detail_item_code_missing` and is not sent | per-order result |
+| ERP-23 | Unreadable batch | query returns a row without the configured order key | cycle returns one `review` entry, no exception, log shows counts only | worker log |
+| ERP-20 | Isolation | include one unmappable SO next to a valid one | bad SO becomes `review`; the valid SO is still sent | per-order results |
+
+## 5.1 eVRP → Thaisausage DO callback test cases
+
+eVRP เรียก `POST /api/v1/vrp/do-received` หลังสร้าง DO เสร็จ ทุกเคสใช้ข้อมูลจำลองเท่านั้น
+
+| ID | Scenario | Action | Expected result | Evidence |
+|---|---|---|---|---|
+| DO-01 | Valid callback | POST with unique `receipt_id` and `do_no` | 202, `state=staged`, `source=eVRP`, `receipt_key=eVRP:<receipt_id>`, `erp_write=false` | receipt/status |
+| DO-02 | Replay | resend the identical payload | 202 with `replayed=true`; one row in `do_receipts` | row count |
+| DO-03 | Conflict | same `receipt_id`, changed payload | 409; original staged row unchanged | response/row |
+| DO-04 | Unauthorized | omit or corrupt the Bearer key | 401; nothing stored | status only |
+| DO-05 | Invalid JSON | malformed body or wrong Content-Type | 422; nothing stored | status only |
+| DO-06 | Missing identity | body without `receipt_id` and `do_no` | 422; nothing stored | status only |
+| DO-07 | No ERP write | inspect ERP after DO-01 to DO-06 | zero ERP rows created/changed; `do_write.enabled=false` | before/after counts |
+| DO-08 | No echo to eVRP | observe outbound traffic during DO tests | Thaisausage sends nothing back to eVRP | redacted network log |
+| DO-09 | Concurrent delivery | send the same callback twice at the same moment | one staged row; the other answer is `replayed=true`; never HTTP 500 | row count/status |
+| DO-10 | Source isolation | same `receipt_id` from ERP path and eVRP path | two separate staged rows, no conflict | `receipt_key` values |
+| DO-11 | Writer disabled | callback while `do_write.enabled=false` | 202, `erp_write=false`, `do_write.state=disabled`, no ERP row | response/ERP counts |
+| DO-12 | No transaction_no | callback without `transaction_no` | 202, `do_write.state=skipped`, DO still staged | response/staging row |
+| DO-13 | Writer rejects | enabled writer with incomplete mapping | 202, `do_write.state=rejected`, no SQL executed | response/log |
+| DO-14 | Duplicate transaction | second DO reusing a written `transaction_no` | 202, `do_write.state=conflict`, one ERP document only | response/ERP counts |
 
 ## 6. Thaisausage → ERP SQL Server test cases
 
@@ -112,7 +145,8 @@ At the end record:
 
 ### Gate B — controlled data flow
 
-- [ ] ERP-06 to ERP-14 pass with mock/staging data.
+- [ ] ERP-06 to ERP-20 pass with mock/staging data.
+- [ ] DO-01 to DO-08 pass with mock callbacks.
 - [ ] SQL-01 to SQL-07 pass using only approved SO SELECTs.
 - [ ] DO receiver proves `erp_write=false`.
 - [ ] ERP row/status counts are unchanged.
