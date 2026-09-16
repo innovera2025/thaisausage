@@ -193,3 +193,34 @@ class DOWriteServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DoWriteSourceScopeTests(unittest.TestCase):
+    """A staged DO is addressed by source plus receipt id, never by receipt id alone."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.database = str(Path(self.temp.name) / "scope.sqlite3")
+        self.connection = FakeConnection()
+        self.service = IntegrationService(self.database, False, Mock(), Mock())
+        self.writer = DOWriter(CONFIG, connect=lambda config: self.connection)
+
+    def test_write_targets_the_receipt_of_the_requested_source(self):
+        self.service.receive_do(staged_payload(), "eVRP")
+        self.assertIsNone(self.service.write_do("DO-R-1", self.writer, source="erp"))
+        self.assertEqual(self.connection.executed, [])
+        result = self.service.write_do("DO-R-1", self.writer, source="eVRP")
+        self.assertEqual(result["state"], "inserted")
+        self.assertEqual(result["receipt_key"], "eVRP:DO-R-1")
+        with sqlite3.connect(self.database) as db:
+            self.assertEqual(db.execute("SELECT receipt_key,source FROM do_writes").fetchall(),
+                             [("eVRP:DO-R-1", "eVRP")])
+
+    def test_same_receipt_id_from_two_sources_writes_twice_without_conflict(self):
+        self.service.receive_do(staged_payload(transaction_no="TR-A"), "erp")
+        self.service.receive_do(staged_payload(do_no="DO-0002", transaction_no="TR-B"), "eVRP")
+        first = self.service.write_do("DO-R-1", self.writer, source="erp")
+        second = self.service.write_do("DO-R-1", self.writer, source="eVRP")
+        self.assertEqual([first["state"], second["state"]], ["inserted", "inserted"])
+        self.assertEqual(len(self.connection.executed), 6)

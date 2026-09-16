@@ -4,9 +4,11 @@ Every test uses a fake driver. No ODBC driver is loaded and no ERP database is
 contacted, so these tests prove statement shape and transaction behaviour only.
 """
 
+import json
 import os
 import unittest
 from datetime import date
+from pathlib import Path
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -228,6 +230,82 @@ class DOTransactionTests(unittest.TestCase):
         # No fake connect: the writer must refuse before touching pyodbc.
         with patch.dict(os.environ, {}, clear=True), self.assertRaises(ContractError):
             DOWriter({**CONFIG, "username_env": "ERP_SQL_USER"}).connect()
+
+ROOT = Path(__file__).resolve().parents[1]
+ERP_HEADER_COLUMNS = [
+    "TransactionNo", "DoNo", "Dodate", "IsApproved", "IsApprovedBy", "IsApprovedDate", "IsClosed",
+    "IsClosedBy", "IsClosedDate", "IsComplete", "IsCompleteBy", "IsCompleteDate", "IsCheck",
+    "IsCheckBy", "IsCheckDate", "IsAcc", "IsAccBy", "IsAccDate", "Revised", "DoType", "DeliveryDate",
+    "CarNumber", "CustCode", "CustName", "BillingAddress", "ShippingAddress", "DlvCode", "RemarkS",
+    "AttachPict", "DocuNw", "VatType", "EntryBy", "EntryDate", "Company", "Comname", "SalesPerson",
+    "SalesName", "Promotion", "Stock", "Scarp", "Paymentinday", "Time", "Market", "TotalAmount",
+    "Discount", "DiscountAmount", "TotalDiscountAmount", "AdvancePay", "VAT", "VATAmount",
+    "TotalActualAmount", "LocationCode", "LocationName", "Driver", "RemarkCode"]
+ERP_DETAIL_COLUMNS = [
+    "TransactionNo", "Slno", "Itemcode", "Description", "ItemModel", "PartNoCust", "PartNameCust",
+    "DescCust", "SoNo", "SOtrNo", "SOline", "SOstock", "PoCust", "DeliveryDueDate", "Qty", "Nw",
+    "TotalNw", "Saleprice", "Units", "IncludeVat", "Warehouse", "DiscountPercent", "DiscountAmount",
+    "Amount"]
+
+
+class ErpContractShapeTests(unittest.TestCase):
+    """The writer must reproduce the ERP DO INSERT contract exactly, column for column."""
+
+    def template(self):
+        return json.loads((ROOT / "config/do-write-template.json").read_text(encoding="utf-8"))["do_write"]
+
+    def filled(self):
+        """Fill every unmapped path with a synthetic payload field name."""
+        config = self.template()
+        for section in ("header_columns", "detail_columns"):
+            for column, spec in config[section].items():
+                if spec.get("source") == "payload" and not spec.get("path"):
+                    spec["path"] = "f_" + column
+        return config
+
+    def payload(self, config):
+        header = {spec["path"]: "v_" + column for column, spec in config["header_columns"].items()
+                  if spec.get("source") == "payload"}
+        line = {spec["path"]: "v_" + column for column, spec in config["detail_columns"].items()
+                if spec.get("source") == "payload"}
+        return {"header": header, "details": [line, dict(line)]}
+
+    def test_template_covers_every_contract_column(self):
+        config = self.template()
+        self.assertEqual(list(config["header_columns"]), ERP_HEADER_COLUMNS)
+        self.assertEqual(list(config["detail_columns"]), ERP_DETAIL_COLUMNS)
+        self.assertIs(config["enabled"], False)
+
+    def test_unfilled_template_refuses_to_build_a_statement(self):
+        writer = DOWriter({**self.template(), "enabled": True}, connect=lambda config: None)
+        with self.assertRaises(ContractError):
+            writer.prepare({"header": {}, "details": [{}]}, "TR-1")
+
+    def test_filled_mapping_matches_the_erp_statement_shape(self):
+        config = self.filled()
+        writer = DOWriter({**config, "enabled": True}, connect=lambda c: None)
+        statements = writer.prepare(self.payload(config), "TR-77")
+        header_sql, header_params = statements[0]
+        self.assertTrue(header_sql.startswith("INSERT INTO dbo.tbl_DOhdr (" + ", ".join(ERP_HEADER_COLUMNS) + ") VALUES ("))
+        # EntryDate is the only column filled by the server clock, so it is not a parameter.
+        self.assertEqual(header_sql.count("GETDATE()"), 1)
+        self.assertEqual(len(header_params), len(ERP_HEADER_COLUMNS) - 1)
+        values = dict(zip([c for c in ERP_HEADER_COLUMNS if c != "EntryDate"], header_params))
+        self.assertEqual(values["TransactionNo"], "TR-77")
+        self.assertEqual(values["IsAcc"], 0)
+        for column in ("IsAccBy", "IsAccDate", "DocuNw"):
+            self.assertIsNone(values[column])
+
+    def test_detail_rows_share_the_transaction_and_number_the_lines(self):
+        config = self.filled()
+        writer = DOWriter({**config, "enabled": True}, connect=lambda c: None)
+        statements = writer.prepare(self.payload(config), "TR-77")
+        self.assertEqual(len(statements), 3)
+        for index, (sql, params) in enumerate(statements[1:], start=1):
+            self.assertTrue(sql.startswith("INSERT INTO dbo.tbl_Dodtl (" + ", ".join(ERP_DETAIL_COLUMNS) + ") VALUES ("))
+            detail = dict(zip(ERP_DETAIL_COLUMNS, params))
+            self.assertEqual(detail["TransactionNo"], "TR-77")
+            self.assertEqual(detail["Slno"], index)
 
 
 if __name__ == "__main__":

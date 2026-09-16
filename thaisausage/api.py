@@ -10,7 +10,7 @@ from .contracts import ContractError, require, text
 from .service import Conflict
 
 
-def create_server(config, service, on_hook_received=None):
+def create_server(config, service, on_hook_received=None, do_writer=None):
     key = os.environ[config["api_key_env"]]
     openapi_path = Path(__file__).resolve().parent.parent / "docs" / "openapi.json"
 
@@ -122,7 +122,7 @@ def create_server(config, service, on_hook_received=None):
                 return
             try:
                 path = urlsplit(self.path).path
-                if path not in ("/api/v1/erp/orders", "/api/v1/erp/pull", "/api/v1/erp/hooks/order-ready", "/api/v1/erp/do-received"):
+                if path not in ("/api/v1/erp/orders", "/api/v1/erp/pull", "/api/v1/erp/hooks/order-ready", "/api/v1/erp/do-received", "/api/v1/vrp/do-received"):
                     return self.reply(404, {"error": "not_found"})
                 payload = self.body()
                 if path == "/api/v1/erp/hooks/order-ready":
@@ -130,8 +130,22 @@ def create_server(config, service, on_hook_received=None):
                     if on_hook_received:
                         on_hook_received()
                     return self.reply(202, result)
-                if path == "/api/v1/erp/do-received":
-                    result = service.receive_do(payload)
+                if path in ("/api/v1/erp/do-received", "/api/v1/vrp/do-received"):
+                    source = "eVRP" if path.startswith("/api/v1/vrp/") else "erp"
+                    result = service.receive_do(payload, source)
+                    # Staging itself never writes ERP, so this stays a boolean the caller can trust.
+                    result["erp_write"] = False
+                    if source == "eVRP" and do_writer is not None:
+                        # A writer problem is reported inside the answer; the DO is staged either way.
+                        write_result = service.attempt_do_write(
+                            result["receipt_id"], do_writer, source,
+                            payload.get("transaction_no"))
+                        result["erp_write"] = write_result["state"] == "inserted"
+                        result["do_write"] = {
+                            key: write_result[key] for key in
+                            ("state", "reason", "transaction_no", "header_rows", "detail_rows", "statements")
+                            if write_result.get(key) is not None
+                        }
                     return self.reply(202, result)
                 if path == "/api/v1/erp/pull":
                     require(text(payload.get("request_id")), "request_id is required")

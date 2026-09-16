@@ -1,0 +1,19 @@
+# The build context is the repository root (deploy/docker-compose.yml sets build.context: ..).
+# A .dockerignore is only read from the context root, so this file — not deploy/.dockerignore —
+# is what keeps secrets and local state out of the build context and the image.
+.env
+config/local.json
+deploy/vps.env
+data/
+.git/
+.gitignore
+tests/
+process/
+docs/*.pdf
+eVRP_ไทยซอส/
+**/__pycache__/
+**/*.pyc
+.venv/
+.DS_Store
+*.zip
+*.pages

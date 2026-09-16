@@ -21,6 +21,22 @@ def canonical(payload):
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+def receipt_key(source, receipt_id):
+    """Scope a DO receipt to the channel that delivered it, e.g. `eVRP:DO-0001`."""
+    return "%s:%s" % (source, receipt_id)
+
+
+def safe_identifier(value):
+    """Return an identifier that is safe to log, or a placeholder.
+
+    Logs carry identifiers only. Anything that is not a plain document-style identifier could be
+    mapped customer data, so it never reaches the log.
+    """
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:\-]{1,120}", value):
+        return value
+    return "<redacted>"
+
+
 class IntegrationService:
     def __init__(self, database, dry_run, vrp, erp):
         self.database, self.dry_run, self.vrp, self.erp = database, dry_run, vrp, erp
@@ -41,13 +57,14 @@ class IntegrationService:
                     received_at TEXT NOT NULL, payload_hash TEXT, reason TEXT
                 );
                 CREATE TABLE IF NOT EXISTS do_receipts (
-                    receipt_id TEXT PRIMARY KEY, do_no TEXT, payload_hash TEXT NOT NULL,
-                    payload TEXT NOT NULL, state TEXT NOT NULL, received_at TEXT NOT NULL
+                    receipt_key TEXT PRIMARY KEY, source TEXT NOT NULL, receipt_id TEXT NOT NULL,
+                    do_no TEXT, payload_hash TEXT NOT NULL, payload TEXT NOT NULL,
+                    state TEXT NOT NULL, received_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS do_writes (
-                    receipt_id TEXT PRIMARY KEY, do_no TEXT, transaction_no TEXT,
-                    payload_hash TEXT NOT NULL, state TEXT NOT NULL, reason TEXT,
-                    updated_at TEXT NOT NULL
+                    receipt_key TEXT PRIMARY KEY, source TEXT NOT NULL, receipt_id TEXT NOT NULL,
+                    do_no TEXT, transaction_no TEXT, payload_hash TEXT NOT NULL,
+                    state TEXT NOT NULL, reason TEXT, updated_at TEXT NOT NULL
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS do_writes_do_no
                     ON do_writes(do_no) WHERE do_no IS NOT NULL;
@@ -56,17 +73,56 @@ class IntegrationService:
             """)
         finally:
             db.close()
-        self._migrate_hook_columns()
+        self._migrate_columns()
+        self._migrate_do_identity()
 
-    def _migrate_hook_columns(self):
+    def _migrate_do_identity(self):
+        """Move older DO tables onto source-scoped receipt keys without losing rows."""
+        rebuilds = {
+            "do_receipts": """
+                CREATE TABLE do_receipts_new (
+                    receipt_key TEXT PRIMARY KEY, source TEXT NOT NULL, receipt_id TEXT NOT NULL,
+                    do_no TEXT, payload_hash TEXT NOT NULL, payload TEXT NOT NULL,
+                    state TEXT NOT NULL, received_at TEXT NOT NULL);
+                INSERT INTO do_receipts_new
+                    SELECT COALESCE(source,'erp')||':'||receipt_id, COALESCE(source,'erp'), receipt_id,
+                           do_no, payload_hash, payload, state, received_at FROM do_receipts;
+                DROP TABLE do_receipts;
+                ALTER TABLE do_receipts_new RENAME TO do_receipts;
+            """,
+            "do_writes": """
+                CREATE TABLE do_writes_new (
+                    receipt_key TEXT PRIMARY KEY, source TEXT NOT NULL, receipt_id TEXT NOT NULL,
+                    do_no TEXT, transaction_no TEXT, payload_hash TEXT NOT NULL,
+                    state TEXT NOT NULL, reason TEXT, updated_at TEXT NOT NULL);
+                INSERT INTO do_writes_new
+                    SELECT 'erp:'||receipt_id, 'erp', receipt_id, do_no, transaction_no,
+                           payload_hash, state, reason, updated_at FROM do_writes;
+                DROP TABLE do_writes;
+                ALTER TABLE do_writes_new RENAME TO do_writes;
+            """,
+        }
         db = self.connect()
         try:
-            columns = {row[1] for row in db.execute("PRAGMA table_info(erp_hooks)")}
+            for table, script in rebuilds.items():
+                columns = {row[1] for row in db.execute("PRAGMA table_info(%s)" % table)}
+                if columns and "receipt_key" not in columns:
+                    db.executescript(script)
+        finally:
+            db.close()
+
+    def _migrate_columns(self):
+        """Add columns that older databases predate; each ALTER is idempotent."""
+        additions = {"erp_hooks": {"payload_hash": "TEXT", "reason": "TEXT"},
+                     "do_receipts": {"source": "TEXT"}}
+        db = self.connect()
+        try:
             with db:
-                if "payload_hash" not in columns:
-                    db.execute("ALTER TABLE erp_hooks ADD COLUMN payload_hash TEXT")
-                if "reason" not in columns:
-                    db.execute("ALTER TABLE erp_hooks ADD COLUMN reason TEXT")
+                for table, columns in additions.items():
+                    existing = {row[1] for row in db.execute("PRAGMA table_info(%s)" % table)}
+                    for column, kind in columns.items():
+                        if column not in existing:
+                            db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, kind))
         finally:
             db.close()
 
@@ -110,44 +166,57 @@ class IntegrationService:
         finally:
             db.close()
 
-    def receive_do(self, payload):
-        """Stage a DO payload for inspection; this method never writes to ERP."""
+    def receive_do(self, payload, source="erp"):
+        """Stage a DO payload for inspection; this method never writes to ERP.
+
+        Identity is scoped by `source`, so the same receipt number delivered by eVRP and by ERP
+        stays two separate staged documents instead of colliding by accident. The claim is taken
+        inside one immediate transaction, so concurrent callbacks replay instead of failing.
+        """
         from .contracts import require, text
         require(isinstance(payload, dict), "DO body must be an object")
+        require(text(source), "DO source is required")
         receipt_id = payload.get("receipt_id") or payload.get("do_no")
         require(text(receipt_id) and len(receipt_id) <= 120, "receipt_id or do_no is required")
         do_no = payload.get("do_no")
         require(do_no is None or text(do_no), "do_no must be a non-empty string when supplied")
         digest = hashlib.sha256(canonical(payload).encode()).hexdigest()
+        key = receipt_key(source, receipt_id)
+        answer = {"receipt_id": receipt_id, "receipt_key": key, "source": source, "erp_write": False}
         db = self.connect()
         try:
-            with db:
-                row = db.execute("SELECT payload_hash,state FROM do_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
-                if row:
-                    if row[0] != digest:
-                        raise Conflict("receipt_id already used with different data")
-                    return {"receipt_id": receipt_id, "state": row[1], "replayed": True}
-                db.execute("INSERT INTO do_receipts VALUES (?,?,?,?,?,?)",
-                           (receipt_id, do_no, digest, canonical(payload), "staged", datetime.now(timezone.utc).isoformat()))
-                return {"receipt_id": receipt_id, "state": "staged", "erp_write": False}
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT payload_hash,state FROM do_receipts WHERE receipt_key=?", (key,)).fetchone()
+            if row:
+                if row[0] != digest:
+                    raise Conflict("receipt_id already used with different data")
+                return {**answer, "state": row[1], "replayed": True}
+            db.execute("INSERT INTO do_receipts(receipt_key,source,receipt_id,do_no,payload_hash,payload,state,received_at)"
+                       " VALUES (?,?,?,?,?,?,?,?)",
+                       (key, source, receipt_id, do_no, digest, canonical(payload), "staged",
+                        datetime.now(timezone.utc).isoformat()))
+            db.commit()
+            return {**answer, "state": "staged"}
         finally:
             db.close()
 
     # A DO write that never reached ERP may be retried after the cause is fixed.
     RETRYABLE_WRITE_STATES = ("preview", "disabled", "rejected")
 
-    def write_do(self, receipt_id, writer, transaction_no=None):
+    def write_do(self, receipt_id, writer, source="erp", transaction_no=None):
         """Write one staged DO into ERP behind the writer feature flag.
 
-        Returns None when the receipt was never staged. This method performs no ERP
-        write in dry-run mode and no write while the writer flag is disabled.
+        Returns None when the receipt was never staged for this source. This method performs no
+        ERP write in dry-run mode and no write while the writer flag is disabled.
         """
         from .contracts import require, text
         require(text(receipt_id), "receipt_id is required")
+        require(text(source), "DO source is required")
+        key = receipt_key(source, receipt_id)
         db = self.connect()
         try:
-            row = db.execute("SELECT payload,payload_hash,do_no FROM do_receipts WHERE receipt_id=?",
-                             (receipt_id,)).fetchone()
+            row = db.execute("SELECT payload,payload_hash,do_no FROM do_receipts WHERE receipt_key=?",
+                             (key,)).fetchone()
         finally:
             db.close()
         if not row:
@@ -160,20 +229,21 @@ class IntegrationService:
         db = self.connect()
         try:
             db.execute("BEGIN IMMEDIATE")
-            claimed = db.execute("SELECT state,payload_hash,reason FROM do_writes WHERE receipt_id=?",
-                                 (receipt_id,)).fetchone()
+            claimed = db.execute("SELECT state,payload_hash,reason FROM do_writes WHERE receipt_key=?",
+                                 (key,)).fetchone()
             if claimed:
                 if claimed[1] != digest:
                     raise Conflict("receipt_id already written with different data")
                 if claimed[0] not in self.RETRYABLE_WRITE_STATES:
-                    return {"receipt_id": receipt_id, "state": claimed[0], "reason": claimed[2],
+                    return {"receipt_id": receipt_id, "receipt_key": key, "source": source,
+                            "state": claimed[0], "reason": claimed[2],
                             "transaction_no": transaction_no, "replayed": True}
-                db.execute("UPDATE do_writes SET state='pending',reason=NULL,updated_at=? WHERE receipt_id=?",
-                           (now, receipt_id))
+                db.execute("UPDATE do_writes SET state='pending',reason=NULL,updated_at=? WHERE receipt_key=?",
+                           (now, key))
             else:
                 try:
-                    db.execute("INSERT INTO do_writes VALUES (?,?,?,?,?,?,?)",
-                               (receipt_id, do_no, transaction_no, digest, "pending", None, now))
+                    db.execute("INSERT INTO do_writes VALUES (?,?,?,?,?,?,?,?,?)",
+                               (key, source, receipt_id, do_no, transaction_no, digest, "pending", None, now))
                 except sqlite3.IntegrityError:
                     raise Conflict("do_no or transaction_no is already claimed by another DO write")
             db.commit()
@@ -199,14 +269,42 @@ class IntegrationService:
         db = self.connect()
         try:
             with db:
-                db.execute("UPDATE do_writes SET state=?,reason=?,updated_at=? WHERE receipt_id=?",
-                           (state, reason, datetime.now(timezone.utc).isoformat(), receipt_id))
+                db.execute("UPDATE do_writes SET state=?,reason=?,updated_at=? WHERE receipt_key=?",
+                           (state, reason, datetime.now(timezone.utc).isoformat(), key))
         finally:
             db.close()
         if reason:
-            logger.warning("do write receipt_id=%s state=%s reason=%s", receipt_id, state, reason)
-        return {"receipt_id": receipt_id, "state": state, "reason": reason,
+            # `reason` is always generated by this codebase, never copied from a payload.
+            logger.warning("do write receipt=%s state=%s reason=%s", safe_identifier(key), state, reason)
+        return {"receipt_id": receipt_id, "receipt_key": key, "source": source,
+                "state": state, "reason": reason,
                 "transaction_no": transaction_no, **detail}
+
+    def attempt_do_write(self, receipt_id, writer, source, transaction_no=None):
+        """Try an ERP DO write without letting its outcome change the staging answer.
+
+        The DO is already staged by the time this runs, so every failure becomes a recorded state
+        for an operator instead of an error raised back at eVRP.
+        """
+        if not transaction_no:
+            result = {"state": "skipped", "reason": "transaction_no_missing"}
+        else:
+            try:
+                result = self.write_do(receipt_id, writer, source=source, transaction_no=transaction_no)
+                if result is None:
+                    result = {"state": "skipped", "reason": "receipt_not_staged"}
+            except Conflict as error:
+                result = {"state": "conflict", "reason": str(error)}
+            except ContractError as error:
+                result = {"state": "rejected", "reason": str(error)}
+            except Exception as error:
+                result = {"state": "needs_review", "reason": type(error).__name__}
+        if result["state"] in ("skipped", "conflict"):
+            # Other states are already logged by write_do when it records them.
+            logger.warning("do write not applied receipt=%s state=%s reason=%s",
+                           safe_identifier(receipt_key(source, receipt_id)),
+                           result["state"], result.get("reason"))
+        return result
 
     def sweep_hooks(self, sqlserver):
         """Read queued hook keys from SQL Server and submit mapped SOs."""
@@ -222,8 +320,12 @@ class IntegrationService:
                     state, reason = "review", "order_no_required"
                     raise StopIteration
                 orders = sqlserver.fetch_orders(order_no)
+                rejected = next((order["rejected_reason"] for order in orders
+                                 if isinstance(order, dict) and order.get("rejected_reason")), None)
                 if not orders:
                     state, reason = "review", "sql_order_not_found"
+                elif rejected:
+                    state, reason = "review", rejected
                 else:
                     request_id = "HOOK-" + event_id[:110]
                     result = self.submit({"request_id": request_id, "orders": orders})
@@ -243,31 +345,64 @@ class IntegrationService:
                 db.close()
             results.append({"event_id": event_id, "state": state, "reason": reason})
             if reason:
-                logger.warning("hook sweep review event_id=%s reason=%s", event_id, reason)
+                logger.warning("hook sweep review event_id=%s reason=%s", safe_identifier(event_id), reason)
         return results
 
     def sweep_approved_orders(self, sqlserver):
-        """Read the configured approved-SO query and submit each new order."""
-        orders = sqlserver.fetch_approved_orders()
+        """Read the configured approved-SO query and submit each new order.
+
+        Each order is isolated: one unmappable or conflicting SO must not stop the
+        rest of the approved batch from reaching eVRP in this cycle.
+        """
+        try:
+            orders = sqlserver.fetch_approved_orders()
+        except Exception as error:
+            # The batch cannot be attributed to individual SOs, so it stops with a known state.
+            reason = type(error).__name__
+            logger.warning("scheduled sweep could not read the approved-SO query: %s", reason)
+            return [{"order_no": None, "state": "review", "reason": reason}]
         results = []
         for order in orders:
-            order_no = order["order_no"]
-            digest = hashlib.sha256(order_no.encode()).hexdigest()[:32]
-            request_id = "SCHEDULE-" + digest
-            db = self.connect()
-            try:
-                claimed = db.execute("SELECT request_id FROM order_claims WHERE order_no=?", (order_no,)).fetchone()
-            finally:
-                db.close()
-            if claimed and not self.dry_run:
-                results.append({"order_no": order_no, "state": "skipped", "reason": "already_claimed"})
+            order_no = order.get("order_no") if isinstance(order, dict) else None
+            if not isinstance(order_no, str) or not order_no.strip():
+                results.append({"order_no": None, "state": "review", "reason": "order_no_missing"})
+                logger.warning("scheduled sweep skipped a row without a usable order_no")
                 continue
-            result = self.submit({"request_id": request_id, "orders": [order]})
-            if self.dry_run:
-                results.append({"order_no": order_no, "state": "preview", "reason": "dry_run_preview"})
-            else:
-                results.append({"order_no": order_no, "state": result["state"],
-                                "reason": result.get("reason")})
+            if order.get("rejected_reason"):
+                results.append({"order_no": order_no, "state": "review", "reason": order["rejected_reason"]})
+                logger.warning("scheduled sweep rejected order_no=%s reason=%s",
+                               safe_identifier(order_no), order["rejected_reason"])
+                continue
+            try:
+                request_id = "SCHEDULE-" + hashlib.sha256(order_no.encode()).hexdigest()[:32]
+                db = self.connect()
+                try:
+                    claimed = db.execute(
+                        "SELECT s.state FROM order_claims c LEFT JOIN submissions s ON s.request_id=c.request_id"
+                        " WHERE c.order_no=?", (order_no,)).fetchone()
+                finally:
+                    db.close()
+                if claimed and not self.dry_run:
+                    # An unresolved earlier attempt stays visible instead of being skipped silently.
+                    prior = claimed[0]
+                    if prior in ("sending", "needs_review"):
+                        results.append({"order_no": order_no, "state": "needs_review",
+                                        "reason": "prior_attempt_" + prior})
+                    else:
+                        results.append({"order_no": order_no, "state": "skipped",
+                                        "reason": "already_sent" if prior == "sent" else "already_claimed"})
+                    continue
+                result = self.submit({"request_id": request_id, "orders": [order]})
+                if self.dry_run:
+                    results.append({"order_no": order_no, "state": "preview", "reason": "dry_run_preview"})
+                else:
+                    results.append({"order_no": order_no, "state": result["state"],
+                                    "reason": result.get("reason")})
+            except Exception as error:
+                reason = type(error).__name__
+                results.append({"order_no": order_no, "state": "review", "reason": reason})
+                logger.warning("scheduled sweep review order_no=%s reason=%s",
+                               safe_identifier(order_no), reason)
         return results
 
     def submit(self, payload):

@@ -5,7 +5,8 @@ from decimal import Decimal
 from unittest.mock import Mock, patch
 
 from thaisausage.contracts import ContractError
-from thaisausage.sqlserver import SQLServerConnector, approved_identifier, connection_string
+from thaisausage.sqlserver import (SQLServerConnector, approval_filtered, approved_identifier,
+                                   connection_string, reviewed_select)
 
 
 class SQLServerConfigTests(unittest.TestCase):
@@ -77,8 +78,16 @@ class SQLServerConfigTests(unittest.TestCase):
         self.assertEqual(result[0]["order_date"], "2026-09-14")
         self.assertEqual(result[0]["items"][0]["quantity"], 2.5)
 
+    def test_approved_orders_query_must_filter_approved_sales_orders(self):
+        for query in ("", "SELECT order_no FROM dbo.v_sales_orders"):
+            connector = SQLServerConnector({"approved_orders_query": query})
+            connector.connect = Mock()
+            with self.subTest(query=query), self.assertRaises(ContractError):
+                connector.fetch_approved_orders()
+            connector.connect.assert_not_called()  # The guard runs before any connection.
+
     def test_fetch_approved_orders_uses_configured_query_without_parameters(self):
-        connector = SQLServerConnector({"approved_orders_query": "SELECT order_no FROM approved_orders"})
+        connector = SQLServerConnector({"approved_orders_query": "SELECT order_no FROM approved_orders WHERE IsApprSo = 1"})
         connector.connect = Mock()
         connection = connector.connect.return_value
         cursor = connection.cursor.return_value
@@ -86,8 +95,85 @@ class SQLServerConfigTests(unittest.TestCase):
         cursor.fetchall.return_value = [("SO-1",)]
         connector._group_rows = Mock(return_value=[{"order_no": "SO-1", "items": []}])
         self.assertEqual(connector.fetch_approved_orders(), [{"order_no": "SO-1", "items": []}])
-        cursor.execute.assert_called_once_with("SELECT order_no FROM approved_orders", ())
+        cursor.execute.assert_called_once_with("SELECT order_no FROM approved_orders WHERE IsApprSo = 1", ())
 
+
+
+class ReviewedQueryGuardTests(unittest.TestCase):
+    """Regression tests for the review findings on the SELECT and approval guards."""
+
+    def test_single_statement_only(self):
+        for sql in ("SELECT 1 AS IsApprSo; CREATE TABLE dbo.probe (id int)",
+                    "SELECT 1 AS IsApprSo; GRANT CONTROL ON DATABASE::ERP TO reader",
+                    "SELECT order_no FROM so;",
+                    "SELECT order_no FROM so; SELECT 1"):
+            with self.subTest(sql=sql), self.assertRaises(ContractError):
+                reviewed_select(sql)
+
+    def test_comments_are_refused(self):
+        for sql in ("SELECT order_no FROM so -- IsApprSo = 1",
+                    "SELECT order_no FROM so /* IsApprSo = 1 */",
+                    "SELECT /* hidden */ order_no FROM so"):
+            with self.subTest(sql=sql), self.assertRaises(ContractError):
+                reviewed_select(sql)
+
+    def test_side_effect_keywords_are_refused(self):
+        for sql in ("SELECT order_no INTO dbo.copy FROM so", "UPDATE so SET x=1",
+                    "SELECT * FROM so WHERE 1=1 DROP TABLE so", "EXEC dbo.Export",
+                    "SELECT * FROM OPENROWSET('x','y','z')", "", "   "):
+            with self.subTest(sql=sql), self.assertRaises(ContractError):
+                reviewed_select(sql)
+
+    def test_plain_select_is_accepted(self):
+        sql = "SELECT h.so_no AS order_no FROM dbo.v_so h WHERE h.IsApprSo = 1"
+        self.assertEqual(reviewed_select(sql), sql)
+
+    def test_approval_predicate_must_be_visible_and_equal_one(self):
+        for sql in ("SELECT order_no FROM so",
+                    "SELECT order_no FROM so WHERE IsApprSo = 0",
+                    "SELECT order_no FROM so WHERE IsApprSo <> 1",
+                    "SELECT order_no FROM so WHERE IsApprSo = 10",
+                    "SELECT order_no FROM so WHERE IsApprSo >= 1",
+                    "SELECT order_no FROM so -- WHERE IsApprSo = 1",
+                    "SELECT order_no, IsApprSo FROM so WHERE IsApprSo = 0"):
+            with self.subTest(sql=sql), self.assertRaises(ContractError):
+                approval_filtered(sql)
+
+    def test_approved_query_shapes_that_are_accepted(self):
+        for sql in ("SELECT order_no FROM so WHERE IsApprSo = 1",
+                    "SELECT order_no FROM so WHERE h.IsApprSo=1",
+                    "SELECT order_no FROM so WHERE [IsApprSo] = 1",
+                    "SELECT order_no, IsApprSo FROM so WHERE IsApprSo = 1 AND company = 'THAI'"):
+            with self.subTest(sql=sql):
+                self.assertEqual(approval_filtered(sql), sql)
+
+
+class DetailCompletenessTests(unittest.TestCase):
+    """An SO whose detail lines cannot be identified must never be sent."""
+
+    def connector(self):
+        return SQLServerConnector({
+            "order_key": "order_no",
+            "field_map": {"order_no": "order_no"},
+            "item_field_map": {"item_code": "item_code", "quantity": "qty"}})
+
+    def test_missing_item_code_rejects_the_whole_order(self):
+        for bad in (None, "", "   "):
+            rows = [{"order_no": "SO-1", "item_code": "ITEM-1", "qty": 1},
+                    {"order_no": "SO-1", "item_code": bad, "qty": 2}]
+            with self.subTest(item_code=repr(bad)):
+                order = self.connector()._group_rows(rows)[0]
+                self.assertEqual(order["rejected_reason"], "detail_item_code_missing")
+                self.assertEqual(len(order["items"]), 1)  # The good line is kept for inspection.
+
+    def test_order_without_any_item_is_rejected(self):
+        order = self.connector()._group_rows([{"order_no": "SO-2", "item_code": None, "qty": 1}])[0]
+        self.assertEqual(order["rejected_reason"], "detail_item_code_missing")
+
+    def test_complete_order_has_no_rejection_marker(self):
+        order = self.connector()._group_rows([{"order_no": "SO-3", "item_code": "ITEM-9", "qty": 4}])[0]
+        self.assertNotIn("rejected_reason", order)
+        self.assertEqual(order["items"], [{"item_code": "ITEM-9", "quantity": 4}])
 
 if __name__ == "__main__":
     unittest.main()

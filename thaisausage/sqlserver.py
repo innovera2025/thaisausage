@@ -15,6 +15,46 @@ from .connectors import mapped
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
+# Reviewed queries are plain single-statement SELECTs. Comments and statement separators are
+# refused outright because this guard matches text and cannot reason about SQL semantics.
+_FORBIDDEN = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|ALTER|DROP|CREATE|TRUNCATE|GRANT|REVOKE|DENY"
+    r"|BACKUP|RESTORE|SHUTDOWN|RECONFIGURE|WAITFOR|BULK|OPENROWSET|OPENQUERY|OPENDATASOURCE|INTO)\b",
+    re.I)
+_APPROVED_PREDICATE = re.compile(
+    r"(?:\b[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)?\[?IsApprSo\]?\s*=\s*1(?![0-9.])", re.I)
+# The whitespace lives inside the lookahead so `= 1` cannot be reached by backtracking.
+_UNSAFE_APPROVAL = re.compile(r"\[?IsApprSo\]?\s*(?:<>|!=|>=|<=|>|<|=(?!\s*1(?![0-9.])))", re.I)
+
+
+def reviewed_select(sql):
+    """Accept one plain SELECT statement; reject separators, comments and side effects."""
+    if not isinstance(sql, str) or not sql.strip():
+        raise ContractError("SQL must be a reviewed SELECT statement")
+    if ";" in sql:
+        raise ContractError("SQL must be a single statement without ';'")
+    if "--" in sql or "/*" in sql or "*/" in sql:
+        raise ContractError("SQL comments are not allowed in a reviewed statement")
+    if not re.match(r"^\s*SELECT\b", sql, re.I):
+        raise ContractError("Only SELECT statements are allowed")
+    if _FORBIDDEN.search(sql):
+        raise ContractError("SQL statement contains a forbidden write or side effect")
+    return sql
+
+
+def approval_filtered(sql):
+    """Require a visible `IsApprSo = 1` predicate and refuse any other comparison of it.
+
+    This is a conservative text contract, not a SQL parser: a query whose approval rule cannot be
+    read here is rejected rather than trusted.
+    """
+    reviewed_select(sql)
+    if _UNSAFE_APPROVAL.search(sql):
+        raise ContractError("approved_orders_query must compare IsApprSo only with 1")
+    if not _APPROVED_PREDICATE.search(sql):
+        raise ContractError("approved_orders_query must filter approved SOs with IsApprSo = 1")
+    return sql
+
 
 def connection_string(config):
     """Build an ODBC string while keeping credentials out of config files/logs."""
@@ -77,11 +117,8 @@ class SQLServerConnector:
             connection.close()
 
     def select_approved(self, connection, sql, parameters=()):
-        """Execute a pre-reviewed SELECT; reject write-shaped statements."""
-        if not isinstance(sql, str) or not re.match(r"^\s*SELECT\b", sql, re.I):
-            raise ContractError("Only SELECT statements are allowed")
-        if re.search(r"\b(INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|ALTER|DROP|TRUNCATE|INTO)\b", sql, re.I):
-            raise ContractError("SQL statement contains a forbidden write or side effect")
+        """Execute a pre-reviewed SELECT; reject anything that is not one plain query."""
+        reviewed_select(sql)
         if not isinstance(parameters, (tuple, list)):
             raise ContractError("SQL parameters must be a tuple or list")
         cursor = connection.cursor()
@@ -107,6 +144,7 @@ class SQLServerConnector:
         sql = self.config.get("approved_orders_query")
         if not sql:
             raise ContractError("Configure sqlserver.approved_orders_query after schema discovery")
+        approval_filtered(sql)
         connection = self.connect()
         try:
             rows = self.select_approved(connection, sql)
@@ -127,12 +165,18 @@ class SQLServerConnector:
         result = []
         for key, group in groups.items():
             order = self._normalize(mapped(group[0], self.config.get("field_map", {})))
-            items = []
+            items, incomplete = [], False
             for row in group:
                 item = self._normalize(mapped(row, self.config.get("item_field_map", {})))
-                if item.get("item_code") is not None:
-                    items.append(item)
+                code = item.get("item_code")
+                # A detail line we cannot identify makes the whole SO unsafe to send.
+                if not isinstance(code, str) or not code.strip():
+                    incomplete = True
+                    continue
+                items.append(item)
             order["items"] = items
+            if incomplete or not items:
+                order["rejected_reason"] = "detail_item_code_missing"
             result.append(order)
         return result
 

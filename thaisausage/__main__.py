@@ -5,11 +5,27 @@ import threading
 from .api import create_server
 from .config import load_config
 from .connectors import ERPConnector, VRPConnector
+from .do_writer import DOWriter
 from .sqlserver import SQLServerConnector
 from .service import IntegrationService
 
 
 logger = logging.getLogger(__name__)
+
+
+def run_sweep_cycle(config, service, sqlserver):
+    """Run one scheduled cycle, or nothing at all while sync is disabled.
+
+    Only per-state counts are logged: never an order, a payload or a driver message.
+    """
+    if not config.get("sync", {}).get("enabled", False):
+        return None
+    results = service.sweep_approved_orders(sqlserver)
+    summary = {}
+    for result in results:
+        summary[result["state"]] = summary.get(result["state"], 0) + 1
+    logger.info("scheduled sweep cycle finished: orders=%d %s", len(results), sorted(summary.items()))
+    return results
 
 
 def main():
@@ -21,19 +37,19 @@ def main():
                                  VRPConnector(config["vrp"]), ERPConnector(config["erp"]))
     scheduler_stop = threading.Event()
     sqlserver = SQLServerConnector(config.get("sqlserver", {}))
-    server = create_server(config, service)
+    do_writer = DOWriter(config.get("do_write", {}))
+    server = create_server(config, service, do_writer=do_writer)
     def sweep_loop():
         interval = int(config.get("sync", {}).get("interval_seconds", 60))
         while not scheduler_stop.is_set():
             scheduler_stop.wait(interval)
             if scheduler_stop.is_set():
                 break
-            if not config.get("sync", {}).get("enabled", False):
-                continue
             try:
-                service.sweep_approved_orders(sqlserver)
-            except Exception:
-                logger.exception("hook sweep cycle failed")
+                run_sweep_cycle(config, service, sqlserver)
+            except Exception as error:
+                # Driver messages can carry connection details, so only the class name is logged.
+                logger.error("scheduled SO sweep cycle failed: %s", type(error).__name__)
     scheduler = threading.Thread(target=sweep_loop, name="sql-sweep", daemon=True)
     scheduler.start()
     print("Thaisausage API http://%s:%s dry_run=%s" % (config["host"], server.server_port, config["dry_run"]), flush=True)
