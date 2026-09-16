@@ -10,7 +10,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from thaisausage.contracts import ContractError
 from thaisausage.do_writer import DOWriteAmbiguous, DOWriteDisabled, DOWriter, build_insert
@@ -306,6 +306,36 @@ class ErpContractShapeTests(unittest.TestCase):
             detail = dict(zip(ERP_DETAIL_COLUMNS, params))
             self.assertEqual(detail["TransactionNo"], "TR-77")
             self.assertEqual(detail["Slno"], index)
+
+
+
+class DiscoveryTests(unittest.TestCase):
+    """Discovery must stay metadata-only and pass the project's own SELECT guard."""
+
+    def test_every_discovery_query_is_a_reviewed_select(self):
+        from thaisausage import discover as module
+        from thaisausage.sqlserver import reviewed_select
+        queries = [value for name, value in vars(module).items()
+                   if name.endswith("_SQL") and isinstance(value, str)]
+        self.assertEqual(len(queries), 6)
+        for sql in queries:
+            with self.subTest(sql=sql.strip().splitlines()[0]):
+                reviewed_select(sql)  # single statement, no comments, no side effects
+                self.assertNotIn("tbl_DOhdr", sql)  # no business table is read for data
+
+    def test_describe_reads_metadata_only_and_binds_the_table_name(self):
+        from thaisausage.discover import describe
+        connector = Mock()
+        connector.select_approved.return_value = []
+        describe(connector, object(), "dbo.tbl_DOhdr")
+        used = [call.args[1] for call in connector.select_approved.call_args_list]
+        bound = [call.args[2] for call in connector.select_approved.call_args_list]
+        self.assertEqual(len(used), 5)
+        for sql in used:
+            self.assertRegex(sql.strip(), r"^SELECT")
+            self.assertIn("?", sql)
+        self.assertEqual(bound[0], ("tbl_DOhdr",))  # INFORMATION_SCHEMA wants the bare name
+        self.assertEqual(bound[1], ("dbo.tbl_DOhdr",))
 
 
 if __name__ == "__main__":
