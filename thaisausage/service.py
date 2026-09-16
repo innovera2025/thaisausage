@@ -374,7 +374,11 @@ class IntegrationService:
                                safe_identifier(order_no), order["rejected_reason"])
                 continue
             try:
-                request_id = "SCHEDULE-" + hashlib.sha256(order_no.encode()).hexdigest()[:32]
+                # eVRP keeps a request_id even when it refuses the payload, so a corrected
+                # order needs a new identity: the id follows the order and its content.
+                request_id = "SCHEDULE-%s-%s" % (
+                    hashlib.sha256(order_no.encode()).hexdigest()[:16],
+                    hashlib.sha256(canonical(order).encode()).hexdigest()[:12])
                 db = self.connect()
                 try:
                     claimed = db.execute(

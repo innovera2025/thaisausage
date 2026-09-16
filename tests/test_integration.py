@@ -609,5 +609,49 @@ class ConnectorErrorBodyTests(unittest.TestCase):
         self.assertIn("h99 not found", caught.exception.detail)
 
 
+class ScheduleRequestIdentityTests(unittest.TestCase):
+    """eVRP remembers a request_id even after refusing it, so corrected data needs a new one."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.database = str(Path(self.temp.name) / "identity.sqlite3")
+        self.payload = json.loads((ROOT / "examples/erp-order.json").read_text())
+        self.vrp = Mock()
+        self.vrp.send.return_value = {"success": True}
+        self.service = IntegrationService(self.database, False, self.vrp, Mock())
+
+    def sent_request_id(self, order):
+        sqlserver = Mock()
+        sqlserver.fetch_approved_orders.return_value = [order]
+        self.service.sweep_approved_orders(sqlserver)
+        return self.vrp.send.call_args.args[0]["request_id"]
+
+    def test_identical_order_keeps_one_identity(self):
+        first = self.sent_request_id(copy.deepcopy(self.payload["orders"][0]))
+        with sqlite3.connect(self.database) as db:  # clear the claim as an operator would
+            db.execute("DELETE FROM order_claims")
+            db.execute("DELETE FROM submissions")
+        second = self.sent_request_id(copy.deepcopy(self.payload["orders"][0]))
+        self.assertEqual(first, second)
+
+    def test_corrected_order_gets_a_new_identity(self):
+        first = self.sent_request_id(copy.deepcopy(self.payload["orders"][0]))
+        with sqlite3.connect(self.database) as db:
+            db.execute("DELETE FROM order_claims")
+            db.execute("DELETE FROM submissions")
+        corrected = copy.deepcopy(self.payload["orders"][0])
+        corrected["pickup_hub_code"] = "h01"  # the fix that caused REQUEST_ID_CONFLICT
+        second = self.sent_request_id(corrected)
+        self.assertNotEqual(first, second)
+        self.assertTrue(second.startswith("SCHEDULE-"))
+        self.assertLessEqual(len(second), 120)
+
+    def test_identity_uses_only_characters_the_contract_allows(self):
+        import re as regex
+        value = self.sent_request_id(copy.deepcopy(self.payload["orders"][0]))
+        self.assertRegex(value, regex.compile(r"^[A-Za-z0-9._:-]{1,120}$"))
+
+
 if __name__ == "__main__":
     unittest.main()
