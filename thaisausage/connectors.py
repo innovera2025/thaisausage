@@ -8,8 +8,10 @@ from .contracts import ContractError
 
 
 class RemoteError(Exception):
-    def __init__(self, status=None):
+    def __init__(self, status=None, detail=None):
         self.status = status
+        # The upstream explanation is kept for the operator; it never changes control flow.
+        self.detail = detail
         super().__init__("Upstream request failed")
 
 
@@ -35,7 +37,11 @@ def request_json(method, base_url, path, headers, timeout, payload=None):
                 raise RemoteError(response.status)
             return json.loads(content)
     except HTTPError as error:
-        raise RemoteError(error.code) from None
+        try:
+            detail = error.read(2048).decode("utf-8", "replace").strip() or None
+        except Exception:
+            detail = None
+        raise RemoteError(error.code, detail) from None
     except (URLError, OSError, ValueError):
         raise RemoteError() from None
 

@@ -567,5 +567,47 @@ class DoCallbackWriterBoundaryTests(unittest.TestCase):
         writer.write.assert_not_called()
 
 
+class UpstreamErrorDetailTests(unittest.TestCase):
+    """A refusal from eVRP must be readable afterwards without sending anything again."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.database = str(Path(self.temp.name) / "upstream.sqlite3")
+        self.payload = json.loads((ROOT / "examples/erp-order.json").read_text())
+        self.vrp = Mock()
+        self.service = IntegrationService(self.database, False, self.vrp, Mock())
+
+    def test_rejected_submission_records_the_upstream_message(self):
+        self.vrp.send.side_effect = RemoteError(422, '{"message":"pickup_hub_code not found"}')
+        result = self.service.submit(self.payload)
+        self.assertEqual(result["reason"], "upstream_http_422")
+        self.assertIn("pickup_hub_code", result["upstream_error"])
+        stored = self.service.get(self.payload["request_id"])
+        self.assertIn("pickup_hub_code", stored["upstream_error"])
+
+    def test_long_upstream_message_is_truncated(self):
+        self.vrp.send.side_effect = RemoteError(400, "x" * 4000)
+        self.assertEqual(len(self.service.submit(self.payload)["upstream_error"]), 500)
+
+    def test_missing_detail_leaves_no_field(self):
+        self.vrp.send.side_effect = RemoteError(500)
+        self.assertNotIn("upstream_error", self.service.submit(self.payload))
+
+
+class ConnectorErrorBodyTests(unittest.TestCase):
+    def test_http_error_body_reaches_the_caller(self):
+        from thaisausage.connectors import request_json
+        body = b'{"success":false,"message":"pickup_hub_code h99 not found"}'
+        error = HTTPError("https://vrp.example/api/v1/orders/import", 422, "Unprocessable", {}, None)
+        error.read = lambda size=None: body
+        with patch("thaisausage.connectors.build_opener") as opener:
+            opener.return_value.open.side_effect = error
+            with self.assertRaises(RemoteError) as caught:
+                request_json("POST", "https://vrp.example", "/v1/orders/import", {}, 5, {"a": 1})
+        self.assertEqual(caught.exception.status, 422)
+        self.assertIn("h99 not found", caught.exception.detail)
+
+
 if __name__ == "__main__":
     unittest.main()
