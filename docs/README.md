@@ -7,6 +7,7 @@
 - [Thaisausage Operations Guide](Thaisausage_Operations_Guide.md) — สำหรับทีมดูแลระบบและ Deploy
 - [Integration Test Plan](Integration_Test_Plan.md) — แผนทดสอบการส่งและรับข้อมูลทั้งสองฝั่ง
 - [DO Insert Contract](do-insert-contract.md) — mapping matrix ของ tbl_DOhdr/tbl_Dodtl สำหรับ ERP DBA
+- [eVRP DO Callback Spec](eVRP_DO_Callback_Spec.md) — ส่งให้ทีม eVRP: วิธียิง DO กลับมาและสิ่งที่เราขอจากเขา
 - [Swagger UI](https://thaisausage.krs.co.th/docs) — API ที่ Deploy อยู่
 - [OpenAPI JSON](openapi.json) — contract สำหรับ import เข้า Postman/Swagger tooling
 
@@ -17,5 +18,6 @@
 - `Thaisausage_Operations_Guide.pdf`
 - `Integration_Test_Plan.pdf`
 - `do-insert-contract.pdf`
+- `eVRP_DO_Callback_Spec.pdf`
 
 เอกสารนี้อ้างอิง contract ของโปรเจกต์เท่านั้น ไม่รวมเอกสารต้นฉบับหรือ Token ของ eVRP
