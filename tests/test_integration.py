@@ -653,5 +653,32 @@ class ScheduleRequestIdentityTests(unittest.TestCase):
         self.assertRegex(value, regex.compile(r"^[A-Za-z0-9._:-]{1,120}$"))
 
 
+class DestinationContractTests(unittest.TestCase):
+    """Fields the destination requires are caught here, not by a rejected batch at eVRP."""
+
+    def setUp(self):
+        self.payload = json.loads((ROOT / "examples/erp-order.json").read_text())
+
+    def test_item_without_description_is_rejected_locally(self):
+        for value in (None, "", "   "):
+            payload = copy.deepcopy(self.payload)
+            if value is None:
+                del payload["orders"][0]["items"][0]["description"]
+            else:
+                payload["orders"][0]["items"][0]["description"] = value
+            with self.subTest(value=repr(value)), self.assertRaises(ContractError):
+                validate_orders(payload)
+
+    def test_payment_in_day_zero_means_cod_and_none_means_not_cod(self):
+        payload = copy.deepcopy(self.payload)
+        payload["orders"][0]["payment_in_day"] = 0
+        self.assertEqual(validate_orders(payload)["orders"][0]["payment_in_day"], 0)
+        payload["orders"][0]["payment_in_day"] = None
+        self.assertIsNone(validate_orders(payload)["orders"][0]["payment_in_day"])
+        payload["orders"][0]["payment_in_day"] = ""
+        with self.assertRaises(ContractError):  # an empty string must never reach eVRP as COD
+            validate_orders(payload)
+
+
 if __name__ == "__main__":
     unittest.main()

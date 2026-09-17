@@ -216,12 +216,13 @@ Content-Type: application/json
 | `order_no` | บังคับ ยาวไม่เกิน 100 และห้ามซ้ำใน batch |
 | `order_date` | `YYYY-MM-DD` แบบ string |
 | `delivery_date` | `null`, `""` หรือ `YYYY-MM-DD` |
-| `payment_in_day` | `null` หรือตัวเลขที่ ≥ 0 โดย `0` หมายถึง COD |
+| `payment_in_day` | `null` หรือตัวเลขที่ ≥ 0 โดย **`0` หมายถึง COD** และ `null` หมายถึงไม่ใช่ COD; ห้ามแปลงค่าว่างเป็น 0 เด็ดขาด (ดู 12.3) |
 | `pickup_hub_code` | บังคับ |
 | `delivery_point_code` / `shipping_address` | ต้องมีอย่างน้อยหนึ่งค่า |
 | `customer.code` | บังคับ ยาวไม่เกิน 50 |
 | `items` | array จำนวน 1–2000 รายการ |
 | `items[].item_code` | บังคับ ยาวไม่เกิน 50 |
+| `items[].description` | บังคับ — eVRP กำหนดให้ทุกบรรทัดต้องมีคำอธิบาย ระบบตรวจให้ก่อนส่ง |
 | `items[].quantity` | JSON number ที่ > 0 |
 | `items[].unit_price` | JSON number ที่ ≥ 0 (สินค้าแถมใช้ราคา 0 และแยกบรรทัด) |
 | `items[].cbm`, `nw` | `null` หรือตัวเลขที่ ≥ 0 |
@@ -495,14 +496,19 @@ curl -fsS https://thaisausage.krs.co.th/health
 | app unhealthy | process ค้าง หรือ config ผิด | `docker compose logs --tail=100 thaisausage` |
 | HTTPS ใช้ไม่ได้ | DNS ผิด หรือพอร์ต 80/443 ถูกปิด | ตรวจ DNS, firewall และ `docker compose logs caddy` |
 
-### 12.3 ข้อกำหนดฝั่ง eVRP ที่พบจากการใช้งานจริง (16 ก.ย. 2026)
+### 12.3 ข้อกำหนดฝั่ง eVRP (ยืนยันกับคู่มือ VRP Integration Guide v1.1 แล้ว)
 
-สิ่งเหล่านี้ไม่มีในเอกสารของผู้ให้บริการ แต่พบตอนส่ง SO ใบจริงใบแรก:
+กฎด้านล่างอยู่ในคู่มือของผู้ให้บริการหัวข้อ 2.2 (Idempotency), 2.10 (HTTP Status Codes) และ
+2.11 (Validation Rules) และเราเจอซ้ำตอนส่ง SO ใบจริงใบแรก:
 
 - **eVRP จอง `request_id` ไว้แม้จะปฏิเสธ payload นั้น** ส่ง id เดิมพร้อมข้อมูลที่แก้แล้วจะได้ `409 REQUEST_ID_CONFLICT` ระบบจึงสร้าง `request_id` จาก `order_no` บวก hash ของเนื้อข้อมูล เพื่อให้ข้อมูลที่แก้แล้วได้ identity ใหม่เสมอ
 - **รหัส hub ต้องมีใน Master Hub ของ eVRP** รหัสคลังของ ERP (`L01` กทม., `L03` นครปฐม) ไม่ใช่รหัสเดียวกับของ eVRP ต้องแปลงใน query
 - **ลูกค้าต้องมี master + จุดส่ง + Route ในระบบ eVRP ก่อน** มิฉะนั้นได้ `CUSTOMER_MASTER_REQUIRED` เป็นงานฝั่ง eVRP ล้วน ระบบเราตรวจล่วงหน้าไม่ได้
 - **`delivery_date` ว่างได้** eVRP จะ default เป็น `order_date` แล้วตอบ warning `DELIVERY_DATE_DEFAULTED`
+- **จุดส่งต้องมี Route ส่วนตัวลูกค้าไม่ต้องมี** และ `delivery_point_code` ถ้าส่งไปต้องตรงกับจุดส่งที่ VRP รู้จัก ถ้าไม่ส่งระบบจะใช้ `shipping_address` ระบุจุดส่งแทน
+- ขีดจำกัดอื่นตามคู่มือ: body ไม่เกิน 10 MB (413), ต้องเป็น `application/json` (415), `order_no` ห้ามซ้ำภายใน request เดียวกัน
+- **ระวังการแปลงค่าว่างเป็นตัวเลข**: ใน ERP `Paymentinday` เป็น `nvarchar(10)` และ `TRY_CONVERT(float, '')` คืนค่า **0** ซึ่ง eVRP อ่านว่า COD — query จึงต้องใช้ `NULLIF(LTRIM(RTRIM(...)), '')` ก่อนแปลงเสมอ มิฉะนั้นคนขับจะไปเก็บเงินปลายทางผิดใบ
+- **`description` ของทุกบรรทัดเป็น Required ของ eVRP** query จึง fallback เป็น `ItemName` → `Description` → `ItemCode` และ validator ของเราบังคับด้วยอีกชั้น
 - ข้อความปฏิเสธจาก eVRP ถูกเก็บไว้ในฟิลด์ `upstream_error` ของ submission (สูงสุด 2000 ตัวอักษร) อ่านได้โดยไม่ต้องส่งซ้ำ
 
 ### 12.4 การล้าง claim เพื่อส่งใหม่

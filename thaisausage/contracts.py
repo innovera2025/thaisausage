@@ -62,6 +62,8 @@ def validate_orders(payload):
             require(isinstance(item, dict), "item must be an object")
             require(text(item.get("item_code")), "item_code is required")
             require(len(item["item_code"]) <= 50, "item_code must be <= 50 characters")
+            # eVRP requires a description on every line; catching it here avoids a rejected batch.
+            require(text(item.get("description")), "description is required")
             for dimension in ("cbm", "nw"):
                 value = item.get(dimension)
                 require(value is None or (number(value) and value >= 0), dimension + " must be null or >= 0")

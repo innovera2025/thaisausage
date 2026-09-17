@@ -152,6 +152,9 @@ Rules used by the local contract:
 - `delivery_point_code` or `shipping_address` must identify the delivery point.
 - `pickup_hub_code` is required and must be a hub known to eVRP.
 - `quantity > 0`; `unit_price >= 0`. A free item remains a separate line with price `0`.
+- `description` is required on every line, because eVRP refuses a line without one.
+- `payment_in_day`: `0` means COD, a positive number is credit days, `null` means not COD.
+  An empty string is not a number: never let it become `0`, or the delivery is collected as cash.
 - Maximum local batch is 100 orders and request body is 1 MiB. eVRP v1.1 supports larger limits,
   but local limits are intentionally stricter until load testing is complete.
 
