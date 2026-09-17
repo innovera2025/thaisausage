@@ -139,6 +139,16 @@ git diff --check
 git status --short          # .env, deploy/vps.env and config/local.json must never appear
 ```
 
+Run the pre-send check, which reads only and contacts nothing:
+
+```sh
+docker compose -f deploy/docker-compose.yml exec -T thaisausage \
+  python -m thaisausage.preflight --config /app/config/local.json --all-orders
+```
+
+It exits non-zero when an order would be refused, a hub code is still a placeholder, or the
+mapped line totals disagree with the ERP header totals.
+
 Then confirm on the VPS copy of `config/local.json`:
 
 - [ ] `dry_run` is the approved value for this release

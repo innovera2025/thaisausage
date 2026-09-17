@@ -60,6 +60,8 @@ Production ที่ติดตั้งอยู่ตาม Operations Guide 
 | `thaisausage/connectors.py` | HTTPS client ไป ERP REST และ eVRP รวมถึงฟังก์ชัน field mapping (`mapped`, `lookup`) |
 | `thaisausage/sqlserver.py` | ODBC connection string, SELECT guard, `fetch_orders` และจัดกลุ่มแถวเป็น SO |
 | `thaisausage/do_writer.py` | DO writer เข้า ERP: สร้าง INSERT แบบ parameterized, transaction เดียว, ปิดเป็นค่าเริ่มต้น |
+| `thaisausage/discover.py` | อ่าน metadata ของ ERP แบบ SELECT-only (ชนิดข้อมูล, key, trigger, FK) และค้นหาว่าคอลัมน์อยู่ตารางไหน |
+| `thaisausage/preflight.py` | ตรวจ config + ข้อมูล SO ของเราก่อนส่ง โดยไม่ติดต่อ eVRP |
 | `thaisausage/config.py` | อ่าน `.env` และ config JSON พร้อมตรวจค่าบังคับ |
 | `config/example.json` | แม่แบบ config (สำเนาจริงคือ `config/local.json` ซึ่งถูก ignore) |
 | `config/do-write-template.json` | แม่แบบ mapping ของ DO writer ครบ 55 + 24 คอลัมน์ตามลำดับของ ERP (ยังเว้น `path` ให้เติม) |
@@ -136,6 +138,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/erp/orders \
 | `sqlserver.auth_mode` | `sql` | `sql` หรือ `integrated` (Trusted_Connection) |
 | `sqlserver.connect_timeout_seconds`, `query_timeout_seconds` | `10`, `30` | timeout ของ ODBC |
 | `sqlserver.approved_orders_query` | ว่าง | SELECT ที่ผ่านการ review แล้ว ต้องมีคำว่า `IsApprSo` (เช่น `WHERE IsApprSo = 1`) มิฉะนั้นระบบปฏิเสธก่อนเชื่อมต่อ |
+| `sqlserver.totals_query` | ไม่มี | ไม่บังคับ — SELECT คืน `order_no`, `total_amount`, `total_actual_amount` ให้ `preflight` ใช้กระทบยอดกับหัว SO |
 | `sqlserver.order_key` | `order_no` | ชื่อคอลัมน์ที่ใช้จัดกลุ่มแถวเป็น SO |
 | `sqlserver.field_map`, `item_field_map` | ว่าง | map คอลัมน์ SQL ไปเป็น standard JSON |
 | `do_write.enabled` | `false` | เปิดการเขียน DO เข้า ERP ห้ามเปิดจนกว่าจะผ่าน UAT และ sign-off |
@@ -535,13 +538,46 @@ print('cleared')"
 - Gate D: ซ้อม backup/restore, กำหนดผู้รับผิดชอบ แล้วตั้ง `dry_run=false` ก่อน จากนั้นจึงตั้ง `sync.enabled=true` และเฝ้าดูรอบแรก
 - F1–F3 แก้แล้วและมี regression test; Gate B ยังต้องผ่านการเชื่อม SQL จริงแบบ read-only กับ SO ที่อนุมัติ รายละเอียดอยู่ใน Operations Guide และ Integration Test Plan
 
+## 12.6 เครื่องมือตรวจก่อนส่ง (`preflight`)
+
+รันได้ทุกเมื่อ อ่านอย่างเดียว ไม่ติดต่อ eVRP และไม่เขียนอะไรทั้งสิ้น:
+
+```sh
+docker compose -f deploy/docker-compose.yml exec -T thaisausage \
+  python -m thaisausage.preflight --config /app/config/local.json --all-orders
+```
+
+รายงาน 5 ส่วน:
+
+- **config** — `dry_run`, `sync.enabled`, `do_write.enabled`, มีเงื่อนไข `IsApprSo = 1` ไหม, ค่า `TOP`, ตัวกรองบริษัท, hub mapping และตัวกรองใบทดสอบที่อาจลืมถอด
+- **data** — จำนวน SO/บรรทัด, แยก COD / เครดิต / ไม่ใช่ COD, `order_no` ซ้ำหรือมีช่องว่างติดมา
+- **erp reconciliation** — เทียบ `Σ(quantity × unit_price)` กับยอดในหัว SO (ต้องตั้ง `sqlserver.totals_query` ก่อน) ถ้าไม่ตรงแปลว่า map คอลัมน์ผิดหรือบรรทัดหาย
+- **needs to exist in the eVRP master** — รายการ hub / customer / delivery point ที่ต้องมีในระบบ eVRP
+- **contract** — validate ทุกใบเหมือนตอนส่งจริง พร้อมจับ hub ที่ยังเป็น placeholder (`HUBCODE`, `XXX`, `REPLACE`, …)
+
+ปิดท้ายด้วย `READY` / `NOT READY` และ exit code 0/1 จึงใส่ใน cron หรือขั้นตอน pre-deploy ได้
+ผลลัพธ์มีแต่รหัสเอกสารและตัวเลข ไม่มีข้อมูลลูกค้า
+
+## 12.7 เครื่องมือสำรวจ schema (`discover`)
+
+ใช้ตอนต้องรู้ชนิดข้อมูล/คีย์/trigger ของตาราง ERP หรือหาว่าคอลัมน์หนึ่งอยู่ตารางไหน:
+
+```sh
+docker compose -f deploy/docker-compose.yml exec -T thaisausage \
+  python -m thaisausage.discover --config /app/config/local.json \
+  --tables dbo.tbl_DOhdr,dbo.tbl_Dodtl --find-column IsApprSo --out /app/data/discovery.json
+```
+
+อ่านเฉพาะ `INFORMATION_SCHEMA` และ `sys.*` ผ่าน SELECT guard เดิม ไม่แตะข้อมูลธุรกิจ
+เขียนผลลง `/app/data/` (volume) เพราะ `/tmp` เป็น tmpfs ที่ `docker cp` อ่านไม่ได้
+
 ## 13. การทดสอบ
 
 ```sh
 python3 -m unittest discover -s tests -v
 ```
 
-ผลวันที่ 16 ก.ย. 2026: ผ่าน 98 จาก 98 test ครอบคลุม HTTP auth, validation, idempotency, การส่งซ้ำพร้อมกัน, timeout, DO staging/callback (replay, conflict, concurrent), scheduled sweep, SQL guard, credential ของ SQL และชุดทดสอบ DO writer (parameter binding, transaction, rollback, duplicate, dry-run, flag ปิด และการสร้าง statement ตามคอลัมน์จริงของ ERP) ทุก test ใช้ mock โดยไม่เรียก ERP หรือ eVRP จริง และไม่มี INSERT เข้า ERP เกิดขึ้น
+ผลวันที่ 17 ก.ย. 2026: ผ่าน 123 จาก 123 test ครอบคลุม HTTP auth, validation, idempotency, การส่งซ้ำพร้อมกัน, timeout, DO staging/callback (replay, conflict, concurrent), scheduled sweep, SQL guard, credential ของ SQL และชุดทดสอบ DO writer (parameter binding, transaction, rollback, duplicate, dry-run, flag ปิด และการสร้าง statement ตามคอลัมน์จริงของ ERP) ทุก test ใช้ mock โดยไม่เรียก ERP หรือ eVRP จริง และไม่มี INSERT เข้า ERP เกิดขึ้น
 
 ส่วนที่ยังไม่มี test เชื่อม SQL Server จริงคือ connection/query กับ schema ของ ERP; มี unit test สำหรับ `_group_rows` และชนิดข้อมูล `Decimal`/`date` แล้ว แต่ยังต้องทำ read-only verification กับ SO ที่อนุมัติ
 
