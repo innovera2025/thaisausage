@@ -224,7 +224,10 @@ class IntegrationService:
         payload, digest, staged_do_no = json.loads(row[0]), row[1], row[2]
         transaction_no = transaction_no or payload.get("transaction_no")
         do_no = payload.get("do_no") or staged_do_no
-        require(text(transaction_no), "transaction_no is required before an ERP DO write")
+        # The writer may allocate the number itself; then it is only known after the write.
+        allocates = getattr(writer, "auto_transaction_no", False)
+        require(allocates or text(transaction_no),
+                "transaction_no is required before an ERP DO write")
         now = datetime.now(timezone.utc).isoformat()
         db = self.connect()
         try:
@@ -269,11 +272,13 @@ class IntegrationService:
             state, reason = "rejected", str(error)
         except Exception as error:
             state, reason = "needs_review", type(error).__name__
+        # An allocated number is only known once the write ran; record it against the claim.
+        transaction_no = detail.get("transaction_no") or transaction_no
         db = self.connect()
         try:
             with db:
-                db.execute("UPDATE do_writes SET state=?,reason=?,updated_at=? WHERE receipt_key=?",
-                           (state, reason, datetime.now(timezone.utc).isoformat(), key))
+                db.execute("UPDATE do_writes SET state=?,reason=?,transaction_no=?,updated_at=? WHERE receipt_key=?",
+                           (state, reason, transaction_no, datetime.now(timezone.utc).isoformat(), key))
         finally:
             db.close()
         if reason:

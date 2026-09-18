@@ -1,6 +1,6 @@
 # eVRP → Thai Sausage: DO Callback Specification
 
-- Document version: 1.3.0
+- Document version: 2.0.0
 - Date: 18 September 2026
 - ผู้รับ: ทีมพัฒนา eVRP
 - Endpoint: `https://thaisausage.krs.co.th/api/v1/vrp/do-received`
@@ -146,23 +146,137 @@ curl -X POST https://thaisausage.krs.co.th/api/v1/vrp/do-received \
 การบันทึกเข้า ERP **ยังไม่เปิดอัตโนมัติ** ในระยะนี้ ทีม Thai Sausage จะเลือกบันทึกทีละใบด้วยมือ
 ภายใต้การตรวจสอบ จึงไม่มีผลข้างเคียงกับ ERP จากการที่ท่านทดสอบยิงเข้ามา
 
-## 9. สิ่งที่ขอเพิ่มเติม เพื่อให้บันทึก DO เข้า ERP ได้
+## 9. รูปแบบ DO ที่ขอให้ส่งมา (เพื่อบันทึกเข้า ERP)
 
-ตาราง DO ของ ERP (`tbl_DOhdr` 55 คอลัมน์ / `tbl_Dodtl` 24 คอลัมน์) ต้องการข้อมูลมากกว่าที่ callback
-ส่งมาในปัจจุบัน (`do_no`, `so_no`, `payment_status`, `payment_amt`, `payment_date`, `payment_time`,
-`payment_send_api`) รบกวนแจ้งว่า API ของท่านส่งข้อมูลกลุ่มนี้มาได้หรือไม่
+ERP บันทึก DO ลงสองตาราง ทีม Thai Sausage กำหนดชื่อฟิลด์ใน JSON ให้ตรงกับคอลัมน์ของ ERP แล้ว
+ส่งเท่าที่มีได้ก่อนก็ได้ ฟิลด์ที่ไม่ส่งจะถูกบันทึกเป็น NULL ยกเว้นฟิลด์ที่ระบุว่าบังคับ
 
-| กลุ่มข้อมูล | ตัวอย่างฟิลด์ที่ ERP ต้องใช้ | ส่งได้ไหม |
-|---|---|---|
-| วันที่จัดส่ง | วันที่ส่งจริง / วันที่กำหนดส่ง | ? |
-| รายการสินค้าใน DO | รหัสสินค้า, จำนวนที่ส่งจริง, หน่วย, น้ำหนัก, ลำดับบรรทัด | ? |
-| การจัดส่ง | ทะเบียนรถ, ชื่อหรือรหัสคนขับ, รหัสเส้นทาง | ? |
-| ยอดเงิน | ยอดรวม, ส่วนลด, ภาษี, ยอดสุทธิ | ? |
-| เลขอ้างอิงฝั่งท่าน | `running_code` / `running_id` ของ DO | ? |
+```json
+{
+  "receipt_id": "DO2609180001",
+  "do_no": "DO2609180001",
+  "status": "delivered",
+  "header": {
+    "do_no": "DO2609180001",
+    "dodate": "2026-09-18",
+    "delivery_date": "2026-09-19",
+    "cust_code": "CT-MS-BKK-2092",
+    "cust_name": "บริษัท ไทย ฟู้ดส์ เฟรซ มาร์เก็ต จำกัด",
+    "shipping_address": "…",
+    "car_number": "70-1234 กรุงเทพมหานคร",
+    "driver": "สมชาย ใจดี",
+    "location_code": "TS-h01",
+    "total_amount": 1070.50,
+    "vat_amount": 70.00,
+    "total_actual_amount": 1140.50,
+    "paymentinday": "30"
+  },
+  "details": [
+    {
+      "item_code": "A20-002",
+      "description": "ซอสหอยนางรมตราทะเลงามพรีเมี่ยม950ก.1*12",
+      "so_no": "SO-L2609-1737",
+      "qty": 10,
+      "units": "ลัง",
+      "saleprice": 595.00,
+      "amount": 5950.00,
+      "warehouse": "WH01"
+    }
+  ]
+}
+```
 
-ถ้ารายการสินค้าส่งมาไม่ได้ เราจะดึงจาก SO ต้นทางใน ERP แทน แต่จะได้ "จำนวนที่สั่ง" ไม่ใช่
-"จำนวนที่ส่งจริง" ซึ่งอาจต่างกันเมื่อมีการส่งบางส่วน — รบกวนยืนยันแนวทางที่เหมาะสมด้วยครับ
+ฟิลด์ที่ **ไม่ต้องส่ง** เพราะระบบเรากำหนดเอง: `TransactionNo` (ออกเลขอัตโนมัติ), `Slno` (ลำดับบรรทัด),
+`EntryDate` (เวลาของ SQL Server), `IsAcc` = 0, `IsAccBy` = NULL, `IsAccDate` = NULL, `DocuNw` = NULL
 
-หมายเหตุ: `TransactionNo`, `Slno`, `EntryDate` และฟิลด์บัญชี (`IsAcc`, `IsAccBy`, `IsAccDate`,
-`DocuNw`) ฝั่ง Thai Sausage เป็นผู้กำหนดเอง ไม่ต้องส่งมา
-ระบบส่งอัตโนมัติตามรอบ ทุก SO ส่งครั้งเดียว และมีระบบกันส่งซ้ำฝั่งเรา
+### 9.1 หัวเอกสาร — `header`
+
+| คอลัมน์ใน ERP | ฟิลด์ใน JSON | ที่มา | บังคับ |
+|---|---|---|---|
+| `TransactionNo` | — | ระบบเราออกเลขเอง |  |
+| `DoNo` | `do_no` | eVRP ส่งมา | ใช่ |
+| `Dodate` | `dodate` | eVRP ส่งมา |  |
+| `IsApproved` | `is_approved` | eVRP ส่งมา |  |
+| `IsApprovedBy` | `is_approved_by` | eVRP ส่งมา |  |
+| `IsApprovedDate` | `is_approved_date` | eVRP ส่งมา |  |
+| `IsClosed` | `is_closed` | eVRP ส่งมา |  |
+| `IsClosedBy` | `is_closed_by` | eVRP ส่งมา |  |
+| `IsClosedDate` | `is_closed_date` | eVRP ส่งมา |  |
+| `IsComplete` | `is_complete` | eVRP ส่งมา |  |
+| `IsCompleteBy` | `is_complete_by` | eVRP ส่งมา |  |
+| `IsCompleteDate` | `is_complete_date` | eVRP ส่งมา |  |
+| `IsCheck` | `is_check` | eVRP ส่งมา |  |
+| `IsCheckBy` | `is_check_by` | eVRP ส่งมา |  |
+| `IsCheckDate` | `is_check_date` | eVRP ส่งมา |  |
+| `IsAcc` | — | ค่าคงที่ |  |
+| `IsAccBy` | — | ค่าคงที่ |  |
+| `IsAccDate` | — | ค่าคงที่ |  |
+| `Revised` | `revised` | eVRP ส่งมา |  |
+| `DoType` | `do_type` | eVRP ส่งมา |  |
+| `DeliveryDate` | `delivery_date` | eVRP ส่งมา |  |
+| `CarNumber` | `car_number` | eVRP ส่งมา |  |
+| `CustCode` | `cust_code` | eVRP ส่งมา | ใช่ |
+| `CustName` | `cust_name` | eVRP ส่งมา |  |
+| `BillingAddress` | `billing_address` | eVRP ส่งมา |  |
+| `ShippingAddress` | `shipping_address` | eVRP ส่งมา |  |
+| `DlvCode` | `dlv_code` | eVRP ส่งมา |  |
+| `RemarkS` | `remark_s` | eVRP ส่งมา |  |
+| `AttachPict` | `attach_pict` | eVRP ส่งมา |  |
+| `DocuNw` | — | ค่าคงที่ |  |
+| `VatType` | `vat_type` | eVRP ส่งมา |  |
+| `EntryBy` | `entry_by` | eVRP ส่งมา |  |
+| `EntryDate` | — | เวลาของ SQL Server |  |
+| `Company` | `company` | eVRP ส่งมา |  |
+| `Comname` | `comname` | eVRP ส่งมา |  |
+| `SalesPerson` | `sales_person` | eVRP ส่งมา |  |
+| `SalesName` | `sales_name` | eVRP ส่งมา |  |
+| `Promotion` | `promotion` | eVRP ส่งมา |  |
+| `Stock` | `stock` | eVRP ส่งมา |  |
+| `Scarp` | `scarp` | eVRP ส่งมา |  |
+| `Paymentinday` | `paymentinday` | eVRP ส่งมา |  |
+| `Time` | `time` | eVRP ส่งมา |  |
+| `Market` | `market` | eVRP ส่งมา |  |
+| `TotalAmount` | `total_amount` | eVRP ส่งมา |  |
+| `Discount` | `discount` | eVRP ส่งมา |  |
+| `DiscountAmount` | `discount_amount` | eVRP ส่งมา |  |
+| `TotalDiscountAmount` | `total_discount_amount` | eVRP ส่งมา |  |
+| `AdvancePay` | `advance_pay` | eVRP ส่งมา |  |
+| `VAT` | `vat` | eVRP ส่งมา |  |
+| `VATAmount` | `vat_amount` | eVRP ส่งมา |  |
+| `TotalActualAmount` | `total_actual_amount` | eVRP ส่งมา |  |
+| `LocationCode` | `location_code` | eVRP ส่งมา |  |
+| `LocationName` | `location_name` | eVRP ส่งมา |  |
+| `Driver` | `driver` | eVRP ส่งมา |  |
+| `RemarkCode` | `remark_code` | eVRP ส่งมา |  |
+
+### 9.2 รายการสินค้า — `details[]`
+
+| คอลัมน์ใน ERP | ฟิลด์ใน JSON | ที่มา | บังคับ |
+|---|---|---|---|
+| `TransactionNo` | — | ระบบเราออกเลขเอง |  |
+| `Slno` | — | ระบบเราใส่ลำดับเอง |  |
+| `Itemcode` | `itemcode` | eVRP ส่งมา | ใช่ |
+| `Description` | `description` | eVRP ส่งมา |  |
+| `ItemModel` | `item_model` | eVRP ส่งมา |  |
+| `PartNoCust` | `part_no_cust` | eVRP ส่งมา |  |
+| `PartNameCust` | `part_name_cust` | eVRP ส่งมา |  |
+| `DescCust` | `desc_cust` | eVRP ส่งมา |  |
+| `SoNo` | `so_no` | eVRP ส่งมา |  |
+| `SOtrNo` | `s_otr_no` | eVRP ส่งมา |  |
+| `SOline` | `s_oline` | eVRP ส่งมา |  |
+| `SOstock` | `s_ostock` | eVRP ส่งมา |  |
+| `PoCust` | `po_cust` | eVRP ส่งมา |  |
+| `DeliveryDueDate` | `delivery_due_date` | eVRP ส่งมา |  |
+| `Qty` | `qty` | eVRP ส่งมา | ใช่ |
+| `Nw` | `nw` | eVRP ส่งมา |  |
+| `TotalNw` | `total_nw` | eVRP ส่งมา |  |
+| `Saleprice` | `saleprice` | eVRP ส่งมา |  |
+| `Units` | `units` | eVRP ส่งมา |  |
+| `IncludeVat` | `include_vat` | eVRP ส่งมา |  |
+| `Warehouse` | `warehouse` | eVRP ส่งมา |  |
+| `DiscountPercent` | `discount_percent` | eVRP ส่งมา |  |
+| `DiscountAmount` | `discount_amount` | eVRP ส่งมา |  |
+| `Amount` | `amount` | eVRP ส่งมา |  |
+
+ชื่อฟิลด์ใน JSON คือชื่อคอลัมน์ของ ERP แปลงเป็นตัวพิมพ์เล็กคั่นด้วย `_` จึงเทียบกลับได้ตรงตัว
+หากฟิลด์ใดระบบท่านไม่มีหรือใช้ชื่ออื่น แจ้งกลับมาได้ เราปรับที่ฝั่งเราโดยไม่ต้องแก้ระบบท่าน

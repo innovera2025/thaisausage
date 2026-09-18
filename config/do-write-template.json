@@ -1,7 +1,8 @@
 {
   "do_write": {
-    "_comment": "Template generated from the ERP DO INSERT contract (16-09-26). Fill every empty \"path\" with the field of the approved DO payload. The writer refuses to run while a path is empty. No secrets belong in this file.",
+    "_comment": "DO write mapping. Payload field names follow docs/eVRP_DO_Callback_Spec.md section 9. TransactionNo is allocated by the writer; Slno and EntryDate are generated.",
     "enabled": false,
+    "transaction_no_source": "auto",
     "header_table": "dbo.tbl_DOhdr",
     "detail_table": "dbo.tbl_Dodtl",
     "connection_string_env": "ERP_SQLSERVER_WRITE_CONNECTION_STRING",
@@ -15,73 +16,60 @@
       },
       "DoNo": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cRun"
+        "path": "do_no",
+        "required": true
       },
       "Dodate": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cDodate"
+        "path": "dodate"
       },
       "IsApproved": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsApproved"
+        "path": "is_approved"
       },
       "IsApprovedBy": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsApprovedBy"
+        "path": "is_approved_by"
       },
       "IsApprovedDate": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsApprovedDate"
+        "path": "is_approved_date"
       },
       "IsClosed": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsClosed"
+        "path": "is_closed"
       },
       "IsClosedBy": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsClosedBy"
+        "path": "is_closed_by"
       },
       "IsClosedDate": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsClosedDate"
+        "path": "is_closed_date"
       },
       "IsComplete": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsComplete"
+        "path": "is_complete"
       },
       "IsCompleteBy": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsCompleteBy"
+        "path": "is_complete_by"
       },
       "IsCompleteDate": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsCompleteDate"
+        "path": "is_complete_date"
       },
       "IsCheck": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsCheck"
+        "path": "is_check"
       },
       "IsCheckBy": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsCheckBy"
+        "path": "is_check_by"
       },
       "IsCheckDate": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIsCheckDate"
+        "path": "is_check_date"
       },
       "IsAcc": {
         "source": "fixed",
@@ -97,58 +85,48 @@
       },
       "Revised": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cRevised"
+        "path": "revised"
       },
       "DoType": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cDeliveryType"
+        "path": "do_type"
       },
       "DeliveryDate": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cDeliveryDateHdr"
+        "path": "delivery_date"
       },
       "CarNumber": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cCarNumber"
+        "path": "car_number"
       },
       "CustCode": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cCustomerCode"
+        "path": "cust_code",
+        "required": true
       },
       "CustName": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cCustomerName"
+        "path": "cust_name"
       },
       "BillingAddress": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cBillingAddress"
+        "path": "billing_address"
       },
       "ShippingAddress": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cShippingAddress"
+        "path": "shipping_address"
       },
       "DlvCode": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cDlvCode"
+        "path": "dlv_code"
       },
       "RemarkS": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cRemark"
+        "path": "remark_s"
       },
       "AttachPict": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cAttachPict"
+        "path": "attach_pict"
       },
       "DocuNw": {
         "source": "fixed",
@@ -156,126 +134,102 @@
       },
       "VatType": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cIncludeVat"
+        "path": "vat_type"
       },
       "EntryBy": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cUser"
+        "path": "entry_by"
       },
       "EntryDate": {
         "source": "server_time"
       },
       "Company": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cCompCode"
+        "path": "company"
       },
       "Comname": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cCompName"
+        "path": "comname"
       },
       "SalesPerson": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?zSalesPerson"
+        "path": "sales_person"
       },
       "SalesName": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?zSalesName"
+        "path": "sales_name"
       },
       "Promotion": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?zPromotion"
+        "path": "promotion"
       },
       "Stock": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?zStock"
+        "path": "stock"
       },
       "Scarp": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?zScarp"
+        "path": "scarp"
       },
       "Paymentinday": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?zPaymentinday"
+        "path": "paymentinday"
       },
       "Time": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?zTime"
+        "path": "time"
       },
       "Market": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?zMarket"
+        "path": "market"
       },
       "TotalAmount": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cTotalAmount"
+        "path": "total_amount"
       },
       "Discount": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cPerdis"
+        "path": "discount"
       },
       "DiscountAmount": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cDiscountAmount"
+        "path": "discount_amount"
       },
       "TotalDiscountAmount": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cTotalDiscountAmount"
+        "path": "total_discount_amount"
       },
       "AdvancePay": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?nAdvancepay"
+        "path": "advance_pay"
       },
       "VAT": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cVAT"
+        "path": "vat"
       },
       "VATAmount": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cVATAmount"
+        "path": "vat_amount"
       },
       "TotalActualAmount": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cTotalActualAmount"
+        "path": "total_actual_amount"
       },
       "LocationCode": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?c_LocNo"
+        "path": "location_code"
       },
       "LocationName": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?c_LocName"
+        "path": "location_name"
       },
       "Driver": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xDriver"
+        "path": "driver"
       },
       "RemarkCode": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cRemarkCode"
+        "path": "remark_code"
       }
     },
     "detail_columns": {
@@ -287,113 +241,93 @@
       },
       "Itemcode": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xItemCode"
+        "path": "itemcode",
+        "required": true
       },
       "Description": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xDescription"
+        "path": "description"
       },
       "ItemModel": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xItemModel"
+        "path": "item_model"
       },
       "PartNoCust": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xPartNoCust"
+        "path": "part_no_cust"
       },
       "PartNameCust": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xPartNameCust"
+        "path": "part_name_cust"
       },
       "DescCust": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xDescCust"
+        "path": "desc_cust"
       },
       "SoNo": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xSoNo"
+        "path": "so_no"
       },
       "SOtrNo": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xSoTrNo"
+        "path": "s_otr_no"
       },
       "SOline": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?nSOline"
+        "path": "s_oline"
       },
       "SOstock": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xSoSt"
+        "path": "s_ostock"
       },
       "PoCust": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xPoCust"
+        "path": "po_cust"
       },
       "DeliveryDueDate": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?dDueDate"
+        "path": "delivery_due_date"
       },
       "Qty": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xMainQuantity"
+        "path": "qty",
+        "required": true
       },
       "Nw": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?nNw"
+        "path": "nw"
       },
       "TotalNw": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?nTotalNw"
+        "path": "total_nw"
       },
       "Saleprice": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?nSaleprice"
+        "path": "saleprice"
       },
       "Units": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?xmainUnits"
+        "path": "units"
       },
       "IncludeVat": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?nIncludeVat"
+        "path": "include_vat"
       },
       "Warehouse": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cWH"
+        "path": "warehouse"
       },
       "DiscountPercent": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cDiscountPercent"
+        "path": "discount_percent"
       },
       "DiscountAmount": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cDiscountAmount"
+        "path": "discount_amount"
       },
       "Amount": {
         "source": "payload",
-        "path": "",
-        "erp_placeholder": "?cAmount"
+        "path": "amount"
       }
     }
   }

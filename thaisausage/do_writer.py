@@ -88,6 +88,26 @@ class DOWriter:
     def enabled(self):
         return self.config.get("enabled") is True
 
+    @property
+    def auto_transaction_no(self):
+        """True when the writer allocates TransactionNo itself instead of being given one."""
+        return self.config.get("transaction_no_source") == "auto"
+
+    def next_transaction_no(self, connection):
+        """Allocate the next TransactionNo inside the caller's transaction.
+
+        TransactionNo is part of the primary key and is not an identity column, so the number has
+        to be chosen. UPDLOCK/HOLDLOCK keeps a second writer — ours or the ERP application doing
+        the same thing — waiting until this transaction ends, instead of picking the same number.
+        """
+        table = approved_identifier(self.config.get("header_table") or "")
+        cursor = connection.cursor()
+        cursor.execute("SELECT ISNULL(MAX(TransactionNo), 0) + 1 FROM %s WITH (UPDLOCK, HOLDLOCK)" % table)
+        row = cursor.fetchone()
+        if not row or row[0] is None:
+            raise ContractError("could not allocate a TransactionNo")
+        return int(row[0])
+
     def _credentials(self):
         """Refuse to write with the read-only source credential."""
         read_names = {"ERP_SQLSERVER_CONNECTION_STRING", "ERP_SQL_USER", "ERP_SQL_PASSWORD"}
@@ -117,7 +137,8 @@ class DOWriter:
     def prepare(self, payload, transaction_no):
         """Validate and build every statement before any connection is opened."""
         require(isinstance(payload, dict), "DO payload must be an object")
-        require(text(transaction_no), "transaction_no is required")
+        # ERP stores TransactionNo as an int, so an allocated number arrives as one.
+        require(isinstance(transaction_no, int) or text(transaction_no), "transaction_no is required")
         header = payload.get("header")
         require(isinstance(header, dict), "DO payload requires a header object")
         details = payload.get("details")
@@ -132,16 +153,22 @@ class DOWriter:
                                            transaction_no, line_no=start + index))
         return statements
 
-    def write(self, payload, transaction_no):
+    def write(self, payload, transaction_no=None):
         """Insert Header and Details inside one transaction, or roll everything back."""
         if not self.enabled:
             raise DOWriteDisabled("do_write.enabled is false")
-        statements = self.prepare(payload, transaction_no)  # Validation precedes connection.
+        # Validation precedes the connection; with an allocated number the statements are rebuilt
+        # once the real number is known, inside the same transaction that takes the lock.
+        self.prepare(payload, transaction_no or "PENDING")
+        statements = None if self.auto_transaction_no else self.prepare(payload, transaction_no)
         rehearsal = self.config.get("rollback_only") is True
         connection = self.connect()
         commit_started = False
         try:
             cursor = connection.cursor()
+            if statements is None:
+                transaction_no = self.next_transaction_no(connection)
+                statements = self.prepare(payload, transaction_no)
             for sql, parameters in statements:
                 cursor.execute(sql, parameters)
             if rehearsal:

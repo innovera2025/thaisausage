@@ -4,6 +4,7 @@ A fake driver stands in for SQL Server, so nothing here can reach a database.
 """
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,6 +104,90 @@ class CommandGuardTests(unittest.TestCase):
         self.assertFalse(bool(config["do_write"]["header_columns"]))
         self.assertTrue(hasattr(command, "table_counts"))
         self.assertIn("--commit", command.__doc__)
+
+
+
+class AutoTransactionNumberTests(unittest.TestCase):
+    """TransactionNo is part of the primary key and is not an identity column."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.database = str(Path(self.temp.name) / "auto.sqlite3")
+        self.service = IntegrationService(self.database, False, Mock(), Mock())
+        payload = dict(PAYLOAD)
+        payload.pop("transaction_no")
+        self.service.receive_do(payload, "eVRP")
+
+    def connection(self, next_no=5001):
+        outer = self
+
+        class Cursor:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def execute(self, sql, parameters=None):
+                self.conn.executed.append((sql, parameters))
+                self.sql = sql
+
+            def fetchone(self):
+                return (next_no,) if "MAX(TransactionNo)" in self.sql else None
+
+        class Connection:
+            def __init__(self):
+                self.executed = []
+                self.committed = self.rolled_back = False
+
+            def cursor(self):
+                return Cursor(self)
+
+            def commit(self):
+                self.committed = True
+
+            def rollback(self):
+                self.rolled_back = True
+
+            def close(self):
+                pass
+
+        outer.conn = Connection()
+        return outer.conn
+
+    def writer(self, **overrides):
+        connection = self.connection()
+        return DOWriter({**CONFIG, "transaction_no_source": "auto", **overrides},
+                        connect=lambda config: connection)
+
+    def test_number_is_allocated_under_a_lock_inside_the_transaction(self):
+        result = self.writer().write({"header": {"do_no": "DO-1"}, "details": [{"item_code": "I-1"}]})
+        self.assertEqual(result["transaction_no"], 5001)
+        allocate = self.conn.executed[0][0]
+        self.assertIn("MAX(TransactionNo)", allocate)
+        self.assertIn("UPDLOCK", allocate)
+        self.assertIn("HOLDLOCK", allocate)
+        self.assertTrue(self.conn.committed)
+
+    def test_allocated_number_is_used_by_header_and_detail(self):
+        self.writer().write({"header": {"do_no": "DO-1"}, "details": [{"item_code": "I-1"}]})
+        inserts = [params for sql, params in self.conn.executed if sql.startswith("INSERT")]
+        self.assertEqual([p[0] for p in inserts], [5001, 5001])
+
+    def test_service_accepts_a_write_without_being_given_a_number(self):
+        result = self.service.write_do("DO-1", self.writer(), source="eVRP")
+        self.assertEqual(result["state"], "inserted")
+        self.assertEqual(result["transaction_no"], 5001)
+        with sqlite3.connect(self.database) as db:
+            stored = db.execute('SELECT transaction_no FROM do_writes').fetchone()[0]
+        self.assertEqual(stored, '5001')
+
+    def test_mapping_is_still_validated_before_connecting(self):
+        def refuse(config):
+            raise AssertionError("validation must precede the connection")
+        writer = DOWriter({**CONFIG, "transaction_no_source": "auto",
+                           "header_columns": {"DoNo": {"source": "payload", "path": "do_no", "required": True}}},
+                          connect=refuse)
+        with self.assertRaises(Exception):
+            writer.write({"header": {}, "details": [{"item_code": "I-1"}]})
 
 
 if __name__ == "__main__":
