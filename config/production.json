@@ -1,0 +1,95 @@
+{
+  "host": "0.0.0.0",
+  "port": 8080,
+  "database": "data/integration.sqlite3",
+  "api_key_env": "THAISAUSAGE_API_KEY",
+  "dry_run": false,
+  "source": {
+    "type": "sqlserver",
+    "id": "main-erp",
+    "company_id": "REPLACE_WITH_COMPANY"
+  },
+  "sqlserver": {
+    "connection_string_env": "ERP_SQLSERVER_CONNECTION_STRING",
+    "username_env": "ERP_SQL_USER",
+    "password_env": "ERP_SQL_PASSWORD",
+    "driver": "ODBC Driver 18 for SQL Server",
+    "auth_mode": "sql",
+    "encrypt": true,
+    "trust_server_certificate": false,
+    "connect_timeout_seconds": 10,
+    "query_timeout_seconds": 30,
+    "approved_objects": [],
+    "approved_query_set": "pending_phase_01_discovery",
+    "orders_query": "",
+    "order_key": "order_no",
+    "field_map": {
+      "order_no": "order_no",
+      "order_date": "order_date",
+      "delivery_date": "delivery_date",
+      "payment_in_day": "payment_in_day",
+      "customer.code": "customer_code",
+      "customer.name": "customer_name",
+      "customer.billing_address_line1": "billing_address",
+      "customer.sale_code": "sale_code",
+      "customer.sale_name": "sale_name",
+      "delivery_point_code": "delivery_point_code",
+      "shipping_address": "shipping_address",
+      "pickup_hub_code": "pickup_hub_code",
+      "pickup_hub_name": "pickup_hub_name"
+    },
+    "item_field_map": {
+      "line_no": "line_no",
+      "item_code": "item_code",
+      "description": "description",
+      "quantity": "quantity",
+      "unit_price": "unit_price",
+      "main_unit": "main_unit",
+      "nw": "nw",
+      "cbm": "cbm"
+    },
+    "approved_orders_query": "SELECT TOP (5000) LTRIM(RTRIM(h.OrderNo)) AS order_no, CONVERT(char(10), h.OrderDate, 23) AS order_date, CONVERT(char(10), CASE WHEN DATEDIFF(day, '19000107', DATEADD(day, 1, h.OrderDate)) % 7 = 0 THEN DATEADD(day, 2, h.OrderDate) ELSE DATEADD(day, 1, h.OrderDate) END, 23) AS delivery_date, TRY_CONVERT(float, NULLIF(LTRIM(RTRIM(h.Paymentinday)), '')) AS payment_in_day, LTRIM(RTRIM(h.CustomerCode)) AS customer_code, h.CustomerName AS customer_name, CAST(h.BillingAddress AS nvarchar(250)) AS billing_address, CAST(h.ShippingAddress AS nvarchar(400)) AS shipping_address, LTRIM(RTRIM(h.CustomerCode)) AS delivery_point_code, 'TS-h01' AS pickup_hub_code, h.LocationName AS pickup_hub_name, h.SalesPerson AS sale_code, h.SalesName AS sale_name, d.ItemOrder AS line_no, LTRIM(RTRIM(d.ItemCode)) AS item_code, COALESCE(NULLIF(LTRIM(RTRIM(d.ItemName)), ''), NULLIF(LTRIM(RTRIM(CAST(d.Description AS nvarchar(180)))), ''), LTRIM(RTRIM(d.ItemCode))) AS description, CAST(d.MainQuantity AS float) AS quantity, CAST(d.UnitPrice AS float) AS unit_price, d.MainUnit AS main_unit, CAST(d.NW AS float) AS nw, CAST(d.M3 AS float) AS cbm FROM dbo.SalesOrderHdr h JOIN dbo.SalesOrderDtl d ON d.TransactionNo = h.TransactionNo WHERE h.IsApprSo = 1 AND LTRIM(RTRIM(h.Company)) = 'TST' AND ISNULL(h.IsCancel, 0) = 0 AND ISNULL(h.IsClosed, 0) = 0 AND h.OrderDate >= '2026-09-16' ORDER BY h.OrderNo, d.ItemOrder",
+    "totals_query": "SELECT LTRIM(RTRIM(h.OrderNo)) AS order_no, CAST(h.TotalAmount AS float) AS total_amount, CAST(h.TotalActualAmount AS float) AS total_actual_amount FROM dbo.SalesOrderHdr h WHERE h.IsApprSo = 1 AND ISNULL(h.IsCancel,0)=0 AND ISNULL(h.IsClosed,0)=0 AND h.OrderDate >= '2026-09-16'"
+  },
+  "vrp": {
+    "base_url": "https://vrp.oneplatformth.com/api",
+    "token_env": "VRP_TOKEN",
+    "timeout_seconds": 30
+  },
+  "erp": {
+    "base_url": "",
+    "orders_path": "/api/orders",
+    "token_env": "ERP_TOKEN",
+    "auth_header": "Authorization",
+    "auth_prefix": "Bearer ",
+    "timeout_seconds": 30,
+    "orders_list_path": "data.orders",
+    "field_map": {
+      "order_no": "order_no",
+      "order_date": "order_date",
+      "delivery_date": "delivery_date",
+      "payment_in_day": "payment_in_day",
+      "customer": "customer",
+      "delivery_point_code": "delivery_point_code",
+      "shipping_address": "shipping_address",
+      "pickup_hub_code": "pickup_hub_code",
+      "pickup_hub_name": "pickup_hub_name"
+    },
+    "items_path": "items",
+    "item_field_map": {
+      "line_no": "line_no",
+      "item_code": "item_code",
+      "description": "description",
+      "cbm": "cbm",
+      "nw": "nw",
+      "main_unit": "main_unit",
+      "pack_unit": "pack_unit",
+      "quantity": "quantity",
+      "unit_price": "unit_price"
+    }
+  },
+  "sync": {
+    "enabled": true,
+    "interval_seconds": 60
+  }
+}
