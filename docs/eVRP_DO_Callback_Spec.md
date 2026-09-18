@@ -84,8 +84,8 @@ Content-Type: application/json
 - **ส่งซ้ำได้ปลอดภัย** ระบบใช้ `receipt_id` เป็นตัวระบุ และเทียบเนื้อหาด้วย hash จึงไม่เกิดข้อมูลซ้ำ
 - **ยิงพร้อมกันได้** ถ้าส่ง DO ใบเดียวกันสองครั้งพร้อมกัน ระบบจองสิทธิ์ในทรานแซกชันเดียว จะได้ `202` ทั้งคู่ ไม่มี `500`
 - **เราไม่ส่งอะไรกลับไป eVRP** หลังรับ DO ไม่มี callback ย้อนกลับ
-- **`erp_write: false` ในระยะนี้** DO ถูกเก็บเข้าพื้นที่ตรวจสอบ (staging) เท่านั้น ยังไม่ถูกบันทึกเข้า ERP
-  จนกว่าจะตกลง mapping ครบและผ่าน UAT ร่วมกัน
+- **`erp_write: false` ในระยะนี้** DO ถูกเก็บเข้าพื้นที่ตรวจสอบ (staging) ก่อนเสมอ การบันทึกเข้า ERP
+  เป็นขั้นตอนที่ทีม Thai Sausage สั่งเองทีละใบหลังตรวจแล้ว
 
 ## 6. ทดสอบ
 
@@ -93,8 +93,9 @@ Content-Type: application/json
 curl -X POST https://thaisausage.krs.co.th/api/v1/vrp/do-received \
   -H "Authorization: Bearer <THAISAUSAGE_API_KEY>" \
   -H "Content-Type: application/json" \
-  -d '{"receipt_id":"DO-TEST-001","do_no":"DO-TEST-001","status":"test",
-       "data":{"so_no":"SO-TEST-001"}}'
+  -d '{"receipt_id":"TEST-001","do_no":"TEST-001","status":"test",
+       "header":{"do_no":"TEST-001","dodate":"2026-09-18","cust_code":"CT-MS-BKK-2092"},
+       "details":[{"item_code":"A20-002","qty":10,"units":"ลัง","amount":5950.00}]}'
 ```
 
 ตรวจสัญญาเพิ่มเติมได้ที่ `https://thaisausage.krs.co.th/openapi.json`
@@ -108,7 +109,7 @@ curl -X POST https://thaisausage.krs.co.th/api/v1/vrp/do-received \
 |---|---|---|---|
 | 1 | ส่งปกติ | POST ด้วย `receipt_id` ใหม่ | `202` · `state: staged` · `erp_write: false` |
 | 2 | ส่งซ้ำ | POST ก้อนเดิมอีกครั้ง | `202` · `replayed: true` · ไม่เกิดข้อมูลซ้ำ |
-| 3 | ข้อมูลเปลี่ยน | `receipt_id` เดิม แก้ค่าใน `data` | `409` |
+| 3 | ข้อมูลเปลี่ยน | `receipt_id` เดิม แก้ค่าใน `header` หรือ `details` | `409` |
 | 4 | ไม่มี key | ตัด header `Authorization` ออก | `401` |
 | 5 | ข้อมูลไม่ครบ | ไม่ส่งทั้ง `receipt_id` และ `do_no` | `422` |
 
@@ -117,8 +118,9 @@ curl -X POST https://thaisausage.krs.co.th/api/v1/vrp/do-received \
 
 **ใช้ `receipt_id` ที่ขึ้นต้นด้วย `TEST-` สำหรับการทดสอบ** เพื่อให้เราแยกออกจากของจริงตอนกระทบยอด
 
-**`erp_write: false` เป็นผลที่ถูกต้องในระยะนี้** DO จะถูกเก็บไว้ในพื้นที่ตรวจสอบของเราเท่านั้น
-ยังไม่บันทึกเข้า ERP จนกว่าจะตกลง mapping และผ่าน UAT ร่วมกัน
+**`erp_write: false` เป็นผลที่ถูกต้องในระยะนี้** DO ที่ท่านส่งมาจะถูกเก็บไว้ในพื้นที่ตรวจสอบของเรา
+ก่อน แล้วทีม Thai Sausage จึงสั่งบันทึกเข้า ERP ทีละใบหลังตรวจความถูกต้อง การทดสอบของท่านจึงไม่
+กระทบข้อมูลใน ERP
 
 ทดสอบเสร็จแจ้งกลับมาได้เลยครับ เราจะตรวจฝั่งเราแล้วยืนยันว่าได้รับครบทุกใบ
 
