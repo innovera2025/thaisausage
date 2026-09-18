@@ -201,7 +201,7 @@ class IntegrationService:
             db.close()
 
     # A DO write that never reached ERP may be retried after the cause is fixed.
-    RETRYABLE_WRITE_STATES = ("preview", "disabled", "rejected")
+    RETRYABLE_WRITE_STATES = ("preview", "disabled", "rejected", "rehearsed")
 
     def write_do(self, receipt_id, writer, source="erp", transaction_no=None):
         """Write one staged DO into ERP behind the writer feature flag.
@@ -256,8 +256,11 @@ class IntegrationService:
                 state, reason = "preview", "dry_run_preview"
                 detail = {"statements": len(writer.prepare(payload, transaction_no))}
             else:
-                state, reason = "inserted", None
                 detail = writer.write(payload, transaction_no)
+                # A rehearsal executes against the real tables and then rolls back, so it proves
+                # permission and statement shape without leaving a document behind.
+                state = "inserted" if detail.get("committed") else "rehearsed"
+                reason = None if state == "inserted" else "rollback_only"
         except DOWriteDisabled:
             state, reason = "disabled", "do_write_disabled"
         except DOWriteAmbiguous as error:

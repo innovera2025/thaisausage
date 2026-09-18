@@ -173,7 +173,8 @@ class DOTransactionTests(unittest.TestCase):
     def test_successful_write_commits_once_with_header_and_details(self):
         connection = FakeConnection()
         result = writer_for(connection).write(PAYLOAD, "TR-10")
-        self.assertEqual(result, {"transaction_no": "TR-10", "header_rows": 1, "detail_rows": 2})
+        self.assertEqual(result, {"transaction_no": "TR-10", "header_rows": 1, "detail_rows": 2,
+                                  "committed": True})
         self.assertEqual(len(connection.executed), 3)
         self.assertTrue(connection.committed)
         self.assertFalse(connection.rolled_back)

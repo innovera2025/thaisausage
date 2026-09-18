@@ -353,7 +353,8 @@ class IntegrationTests(unittest.TestCase):
     def test_vrp_do_callback_writes_when_writer_is_configured(self):
         self.config.update(host="127.0.0.1", port=0, dry_run=False)
         writer = Mock()
-        writer.write.return_value = {"transaction_no": "TX-1", "header_rows": 1, "detail_rows": 1}
+        writer.write.return_value = {"transaction_no": "TX-1", "header_rows": 1, "detail_rows": 1,
+                                     "committed": True}
         with patch.dict(os.environ, THAISAUSAGE_API_KEY="test-key"):
             server = create_server(self.config, self.service, do_writer=writer)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -545,7 +546,8 @@ class DoCallbackWriterBoundaryTests(unittest.TestCase):
 
     def test_duplicate_transaction_no_is_reported_not_raised(self):
         writer = Mock()
-        writer.write.return_value = {"transaction_no": "TR-9", "header_rows": 1, "detail_rows": 1}
+        writer.write.return_value = {"transaction_no": "TR-9", "header_rows": 1, "detail_rows": 1,
+                                     "committed": True}
         url = self.serve(writer)
         first = {"receipt_id": "D4", "do_no": "DO-4", "transaction_no": "TR-9",
                  "header": {"do_no": "DO-4"}, "details": [{"item_code": "I-1"}]}

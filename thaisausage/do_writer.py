@@ -137,12 +137,19 @@ class DOWriter:
         if not self.enabled:
             raise DOWriteDisabled("do_write.enabled is false")
         statements = self.prepare(payload, transaction_no)  # Validation precedes connection.
+        rehearsal = self.config.get("rollback_only") is True
         connection = self.connect()
         commit_started = False
         try:
             cursor = connection.cursor()
             for sql, parameters in statements:
                 cursor.execute(sql, parameters)
+            if rehearsal:
+                # Proves permission, mapping and SQL shape against the real tables, then leaves
+                # nothing behind. Used before the first committed write.
+                connection.rollback()
+                return {"transaction_no": transaction_no, "header_rows": 1,
+                        "detail_rows": len(statements) - 1, "committed": False}
             commit_started = True
             connection.commit()
         except Exception:
@@ -160,4 +167,4 @@ class DOWriter:
             except Exception:
                 pass  # The transaction already resolved; closing is best effort.
         return {"transaction_no": transaction_no, "header_rows": 1,
-                "detail_rows": len(statements) - 1}
+                "detail_rows": len(statements) - 1, "committed": True}
