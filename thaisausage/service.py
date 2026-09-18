@@ -294,7 +294,9 @@ class IntegrationService:
         The DO is already staged by the time this runs, so every failure becomes a recorded state
         for an operator instead of an error raised back at eVRP.
         """
-        if not transaction_no:
+        if not transaction_no and not getattr(writer, "auto_transaction_no", False):
+            # Nobody can supply the number: eVRP does not send one and this writer does not
+            # allocate one. Writing would fail on a NOT NULL primary key column.
             result = {"state": "skipped", "reason": "transaction_no_missing"}
         else:
             try:

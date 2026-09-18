@@ -180,6 +180,16 @@ class AutoTransactionNumberTests(unittest.TestCase):
             stored = db.execute('SELECT transaction_no FROM do_writes').fetchone()[0]
         self.assertEqual(stored, '5001')
 
+    def test_callback_writes_without_being_handed_a_number(self):
+        """An allocating writer must not be skipped for the number it allocates itself."""
+        result = self.service.attempt_do_write("DO-1", self.writer(), source="eVRP")
+        self.assertEqual(result["state"], "inserted")
+
+    def test_callback_still_skips_when_nobody_can_supply_the_number(self):
+        writer = DOWriter(CONFIG, connect=lambda config: self.connection())
+        result = self.service.attempt_do_write("DO-1", writer, source="eVRP")
+        self.assertEqual((result["state"], result["reason"]), ("skipped", "transaction_no_missing"))
+
     def test_mapping_is_still_validated_before_connecting(self):
         def refuse(config):
             raise AssertionError("validation must precede the connection")

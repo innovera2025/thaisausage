@@ -255,7 +255,7 @@ ERP บันทึก DO ลงสองตาราง ทีม Thai Sausage 
 |---|---|---|---|
 | `TransactionNo` | — | ระบบเราออกเลขเอง |  |
 | `Slno` | — | ระบบเราใส่ลำดับเอง |  |
-| `Itemcode` | `itemcode` | eVRP ส่งมา | ใช่ |
+| `Itemcode` | `item_code` | eVRP ส่งมา | ใช่ |
 | `Description` | `description` | eVRP ส่งมา |  |
 | `ItemModel` | `item_model` | eVRP ส่งมา |  |
 | `PartNoCust` | `part_no_cust` | eVRP ส่งมา |  |

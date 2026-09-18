@@ -241,7 +241,7 @@
       },
       "Itemcode": {
         "source": "payload",
-        "path": "itemcode",
+        "path": "item_code",
         "required": true
       },
       "Description": {
