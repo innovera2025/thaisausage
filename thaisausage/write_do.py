@@ -6,11 +6,14 @@ can prove the write against the real tables under supervision.
 Default is a rehearsal — the INSERTs run inside a transaction that is rolled back, which proves
 the credential, the mapping and the statement shape while leaving no document behind:
 
-    python3 -m thaisausage.write_do --config config/local.json \\
-        --receipt-id DO2609040001 --transaction-no 900001
+    python3 -m thaisausage.write_do --config config/local.json --receipt-id DO2609040001
 
-Adding --commit keeps the rows. It writes to the live ERP tables, so the transaction number must
-be one the ERP team agreed to, and the row counts printed before and after are the evidence.
+TransactionNo is part of the primary key and ERP does not generate it, so the writer allocates
+the next number under a lock when do_write.transaction_no_source is "auto". Pass
+--transaction-no instead to use a number the ERP team handed over.
+
+Adding --commit keeps the rows. It writes to the live ERP tables, and the row counts printed
+before and after are the evidence.
 """
 
 import argparse
@@ -38,8 +41,9 @@ def main():
     parser.add_argument("--config", default="config/local.json")
     parser.add_argument("--receipt-id", required=True)
     parser.add_argument("--source", default="eVRP")
-    parser.add_argument("--transaction-no", required=True,
-                        help="the TransactionNo agreed with the ERP team; it is part of the primary key")
+    parser.add_argument("--transaction-no",
+                        help="the TransactionNo to use; omit it when do_write.transaction_no_source is auto, "
+                             "which makes the writer allocate one inside the same transaction")
     parser.add_argument("--commit", action="store_true",
                         help="keep the rows instead of rolling back (writes to the live ERP tables)")
     args = parser.parse_args()
@@ -51,12 +55,15 @@ def main():
     # Intent comes from this command line, not from the deployed configuration file.
     do_write["enabled"] = True
     do_write["rollback_only"] = not args.commit
+    automatic = do_write.get("transaction_no_source") == "auto"
+    if not args.transaction_no and not automatic:
+        raise SystemExit("--transaction-no is required unless do_write.transaction_no_source is \"auto\"")
 
     tables = [do_write.get("header_table"), do_write.get("detail_table")]
     before = table_counts(config, tables)
     print("mode        :", "COMMIT (rows are kept)" if args.commit else "rehearsal (rolled back)")
     print("receipt     :", args.source + ":" + args.receipt_id)
-    print("transaction :", args.transaction_no)
+    print("transaction :", args.transaction_no or "allocated by the writer under a lock")
     print("before      :", before)
 
     service = IntegrationService(config["database"], config["dry_run"],
