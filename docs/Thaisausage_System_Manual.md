@@ -41,7 +41,7 @@ eVRP DO -------> /vrp/do-received --> do_receipts (staged, never written back to
 | รับ DO จาก eVRP (`/vrp/do-received`) | มี | ใช่ — staging เท่านั้น |
 | DO staging เดิม (`/erp/do-received`) | มี | ใช่ — เก็บไว้เพื่อ compatibility |
 | DO writer เข้า `tbl_DOhdr`/`tbl_Dodtl` | มีและต่อเข้ากับ callback แล้ว | ไม่ — ปิดอยู่ (`do_write.enabled=false`) และยังไม่มี mapping จาก DBA |
-| ส่งข้อมูลจริงไป eVRP | มี connector | ยังไม่ผ่าน UAT |
+| ส่งข้อมูลจริงไป eVRP | มี | **ใช้งานจริงแล้ว** — 18 ก.ย. 2026 ส่งสำเร็จ 10 ใบ (`running_code` 260916000001–000010) |
 | Swagger UI / OpenAPI | มี | ใช่ |
 | COD callback, เขียนกลับ ERP, retry worker, outbox, API ปลด/แก้ SO | ไม่มี | — |
 
@@ -499,7 +499,16 @@ curl -fsS https://thaisausage.krs.co.th/health
 | app unhealthy | process ค้าง หรือ config ผิด | `docker compose logs --tail=100 thaisausage` |
 | HTTPS ใช้ไม่ได้ | DNS ผิด หรือพอร์ต 80/443 ถูกปิด | ตรวจ DNS, firewall และ `docker compose logs caddy` |
 
-### 12.3 ข้อกำหนดฝั่ง eVRP (ยืนยันกับคู่มือ VRP Integration Guide v1.1 แล้ว)
+### 12.3 ค่าจริงที่ eVRP ยืนยันแล้ว (18 ก.ย. 2026)
+
+| เรื่อง | ค่าที่ eVRP ยืนยัน |
+|---|---|
+| `pickup_hub_code` | **`TS-h01`** ใช้ได้ทั้งคลังนครปฐมและกรุงเทพ จึงตั้งเป็นค่าคงที่ในquery ไม่ต้องแปลงจาก `LocationCode` |
+| `delivery_point_code` | **เท่ากับรหัสลูกค้า** — eVRP สร้างจุดส่งโดยใช้รหัสลูกค้าของเราเป็นรหัสจุดส่ง |
+| `delivery_date` | ให้เราส่งมาเสมอ คำนวณเป็น **`order_date + 1 วัน` และถ้าตรงวันอาทิตย์ให้ข้ามไปวันจันทร์** (query ใช้ `DATEDIFF` จาก 1900-01-07 จึงไม่ขึ้นกับ `DATEFIRST` หรือภาษาของ server) |
+| Customer master | eVRP ตั้งให้แล้ว 7 จาก 8 ราย ยังขาด `CT-LR-BKK-2088` (ซี.เจ.เอ็กซ์เพรส) |
+
+### 12.3.1 ข้อกำหนดฝั่ง eVRP (ยืนยันกับคู่มือ VRP Integration Guide v1.1 แล้ว)
 
 กฎด้านล่างอยู่ในคู่มือของผู้ให้บริการหัวข้อ 2.2 (Idempotency), 2.10 (HTTP Status Codes) และ
 2.11 (Validation Rules) และเราเจอซ้ำตอนส่ง SO ใบจริงใบแรก:
