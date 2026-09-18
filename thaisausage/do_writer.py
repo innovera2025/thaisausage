@@ -65,6 +65,10 @@ def build_insert(table, columns, source, transaction_no, line_no=None):
         elif kind == "payload":
             require(text(spec.get("path")), column + " payload mapping requires a path")
             value = lookup(source, spec["path"])
+            if value is None and "default" in spec:
+                # A column ERP needs filled but eVRP has no opinion about. Sending it stays
+                # possible; leaving it out gets the value the ERP team asked for.
+                value = spec["default"]
         else:
             raise ContractError(column + " mapping source must be payload, fixed, transaction_no, line_no or server_time")
         if value is None and spec.get("required"):

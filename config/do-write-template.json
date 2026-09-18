@@ -25,7 +25,8 @@
       },
       "IsApproved": {
         "source": "payload",
-        "path": "is_approved"
+        "path": "is_approved",
+        "default": 0
       },
       "IsApprovedBy": {
         "source": "payload",
@@ -37,7 +38,8 @@
       },
       "IsClosed": {
         "source": "payload",
-        "path": "is_closed"
+        "path": "is_closed",
+        "default": 0
       },
       "IsClosedBy": {
         "source": "payload",
@@ -49,7 +51,8 @@
       },
       "IsComplete": {
         "source": "payload",
-        "path": "is_complete"
+        "path": "is_complete",
+        "default": 0
       },
       "IsCompleteBy": {
         "source": "payload",
@@ -61,7 +64,8 @@
       },
       "IsCheck": {
         "source": "payload",
-        "path": "is_check"
+        "path": "is_check",
+        "default": 0
       },
       "IsCheckBy": {
         "source": "payload",
@@ -85,11 +89,13 @@
       },
       "Revised": {
         "source": "payload",
-        "path": "revised"
+        "path": "revised",
+        "default": 0
       },
       "DoType": {
         "source": "payload",
-        "path": "do_type"
+        "path": "do_type",
+        "default": "ขนส่งโดยบริษัท"
       },
       "DeliveryDate": {
         "source": "payload",

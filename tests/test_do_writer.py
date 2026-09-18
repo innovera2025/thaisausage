@@ -48,6 +48,31 @@ def inserts(connection):
     """Count only the INSERTs; the writer also asks how many documents share the number."""
     return [entry for entry in connection.executed if entry[0].startswith("INSERT")]
 
+
+class DefaultValueTests(unittest.TestCase):
+    """Columns the ERP application needs filled, which eVRP has no opinion about."""
+
+    def build(self, payload):
+        from thaisausage.do_writer import build_insert
+        columns = {"IsApproved": {"source": "payload", "path": "is_approved", "default": 0},
+                   "DoType": {"source": "payload", "path": "do_type", "default": "ขนส่งโดยบริษัท"}}
+        sql, parameters = build_insert("dbo.tbl_DOhdr", columns, payload, 900001)
+        return parameters
+
+    def test_a_missing_value_becomes_the_agreed_default(self):
+        self.assertEqual(self.build({}), (0, "ขนส่งโดยบริษัท"))
+
+    def test_a_value_that_is_sent_still_wins(self):
+        self.assertEqual(self.build({"is_approved": 1, "do_type": "ลูกค้ามารับเอง"}),
+                         (1, "ลูกค้ามารับเอง"))
+
+    def test_a_column_without_a_default_is_still_left_null(self):
+        from thaisausage.do_writer import build_insert
+        _, parameters = build_insert("dbo.tbl_DOhdr", {"Remark": {"source": "payload", "path": "remark"}},
+                                     {}, 900001)
+        self.assertEqual(parameters, (None,))
+
+
 class FakeConnection:
     def __init__(self, fail_commit=False):
         self.executed = []
