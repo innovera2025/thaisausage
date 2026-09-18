@@ -76,6 +76,15 @@ class ExpectedValueTests(unittest.TestCase):
         self.assertEqual(expected({"source": "transaction_no"}, payload, 11504, 1), 11504)
         self.assertEqual(expected({"source": "line_no"}, payload, 1, 3), 3)
 
+    def test_a_default_is_what_we_expect_to_find(self):
+        """The writer fills these in, so ERP holding the default is a match, not a difference."""
+        spec = {"source": "payload", "path": "do_type", "default": "ขนส่งโดยบริษัท"}
+        self.assertEqual(expected(spec, {}, 1, 1), "ขนส่งโดยบริษัท")
+
+    def test_a_value_that_was_sent_is_still_what_we_expect(self):
+        spec = {"source": "payload", "path": "do_type", "default": "ขนส่งโดยบริษัท"}
+        self.assertEqual(expected(spec, {"do_type": "ลูกค้ามารับเอง"}, 1, 1), "ลูกค้ามารับเอง")
+
     def test_the_server_clock_is_not_compared(self):
         self.assertIsNone(expected({"source": "server_time"}, {}, 1, 1))
 

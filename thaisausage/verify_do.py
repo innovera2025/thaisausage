@@ -15,6 +15,7 @@ Add --receipt-id to compare against the staged payload instead of only printing 
 import argparse
 import json
 import sqlite3
+import sys
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -78,7 +79,9 @@ def expected(spec, source, transaction_no, line_no):
     """What we intended this column to hold, or None when only ERP decides."""
     kind = spec.get("source")
     if kind == "payload":
-        return lookup(source, spec.get("path"))
+        value = lookup(source, spec.get("path"))
+        # The writer fills these in when nothing is sent, so the default is what we expect to find.
+        return spec["default"] if value is None and "default" in spec else value
     if kind == "fixed":
         return spec.get("value")
     if kind == "transaction_no":
@@ -161,10 +164,12 @@ def main():
     print()
     if payload is None:
         print("แสดงค่าที่อยู่ใน ERP เท่านั้น (ไม่ได้ระบุ --receipt-id จึงไม่มีอะไรให้เทียบ)")
-    elif differences:
-        raise SystemExit("พบ %d คอลัมน์ที่ไม่ตรงกัน" % differences)
-    else:
-        print("ทุกคอลัมน์ตรงกับที่ส่งไป")
+        return
+    if differences:
+        print("พบ %d คอลัมน์ที่ไม่ตรงกัน" % differences)
+        sys.stdout.flush()
+        raise SystemExit(1)
+    print("ทุกคอลัมน์ตรงกับที่ส่งไป")
 
 
 if __name__ == "__main__":
