@@ -93,20 +93,51 @@ class DOWriter:
         """True when the writer allocates TransactionNo itself instead of being given one."""
         return self.config.get("transaction_no_source") == "auto"
 
+    @property
+    def reserved_from(self):
+        """The first number of the range the ERP team set aside for us, if they set one aside."""
+        minimum = self.config.get("transaction_no_minimum")
+        return int(minimum) if minimum else None
+
     def next_transaction_no(self, connection):
         """Allocate the next TransactionNo inside the caller's transaction.
 
         TransactionNo is part of the primary key and is not an identity column, so the number has
-        to be chosen. UPDLOCK/HOLDLOCK keeps a second writer — ours or the ERP application doing
-        the same thing — waiting until this transaction ends, instead of picking the same number.
+        to be chosen. UPDLOCK/HOLDLOCK stops a second writer taking the same number — but only a
+        writer that takes the same lock, and the ERP application reads MAX without one. On
+        18-09-26 that produced two documents numbered 11504. So the real protection is
+        transaction_no_minimum: a range the ERP application never reaches, counted separately.
         """
         table = approved_identifier(self.config.get("header_table") or "")
         cursor = connection.cursor()
-        cursor.execute("SELECT ISNULL(MAX(TransactionNo), 0) + 1 FROM %s WITH (UPDLOCK, HOLDLOCK)" % table)
+        floor = self.reserved_from
+        if floor:
+            cursor.execute(
+                "SELECT ISNULL(MAX(TransactionNo), ?) + 1 FROM %s WITH (UPDLOCK, HOLDLOCK) "
+                "WHERE TransactionNo >= ?" % table, (floor - 1, floor))
+        else:
+            cursor.execute("SELECT ISNULL(MAX(TransactionNo), 0) + 1 FROM %s WITH (UPDLOCK, HOLDLOCK)" % table)
         row = cursor.fetchone()
         if not row or row[0] is None:
             raise ContractError("could not allocate a TransactionNo")
         return int(row[0])
+
+    def assert_number_is_ours(self, connection, transaction_no):
+        """Refuse to commit if the number now belongs to someone else's document too.
+
+        Run after the INSERTs and before COMMIT: our own header row is the one row expected. A
+        second row means another writer committed the same number while we were working, and
+        the database will not complain about it, because RowOrder makes the key unique anyway.
+        """
+        table = approved_identifier(self.config.get("header_table") or "")
+        cursor = connection.cursor()
+        cursor.execute("SELECT COUNT(*) FROM %s WHERE TransactionNo = ?" % table, (transaction_no,))
+        row = cursor.fetchone()
+        found = int(row[0]) if row and row[0] is not None else 0
+        if found != 1:
+            raise ContractError(
+                "TransactionNo %s is used by %d documents; refusing to add another"
+                % (transaction_no, found))
 
     def _credentials(self):
         """Refuse to write with the read-only source credential."""
@@ -171,6 +202,7 @@ class DOWriter:
                 statements = self.prepare(payload, transaction_no)
             for sql, parameters in statements:
                 cursor.execute(sql, parameters)
+            self.assert_number_is_ours(connection, transaction_no)
             if rehearsal:
                 # Proves permission, mapping and SQL shape against the real tables, then leaves
                 # nothing behind. Used before the first committed write.

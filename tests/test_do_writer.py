@@ -43,6 +43,11 @@ def staged_payload(receipt_id="DO-R-1", do_no="DO-0001", transaction_no="TR-0001
                                                     {"item_code": "ITEM-0002"}]}
 
 
+
+def inserts(connection):
+    """Count only the INSERTs; the writer also asks how many documents share the number."""
+    return [entry for entry in connection.executed if entry[0].startswith("INSERT")]
+
 class FakeConnection:
     def __init__(self, fail_commit=False):
         self.executed = []
@@ -55,6 +60,12 @@ class FakeConnection:
         class Cursor:
             def execute(self, sql, parameters):
                 connection.executed.append((sql, parameters))
+
+            def fetchone(self):
+                sql = connection.executed[-1][0]
+                if "COUNT(*)" in sql:
+                    return (1,)  # our own header row, and nobody else's
+                return (5001,) if "MAX(TransactionNo)" in sql else None
         return Cursor()
 
     def commit(self):
@@ -102,7 +113,7 @@ class DOWriteServiceTests(unittest.TestCase):
         self.assertEqual(result["state"], "inserted")
         self.assertEqual(result["header_rows"], 1)
         self.assertEqual(result["detail_rows"], 2)
-        self.assertEqual(len(self.connection.executed), 3)
+        self.assertEqual(len(inserts(self.connection)), 3)
         self.assertTrue(self.connection.committed)
         self.assertEqual(self.write_states(), [("DO-R-1", "DO-0001", "TR-0001", "inserted", None)])
 
@@ -127,7 +138,7 @@ class DOWriteServiceTests(unittest.TestCase):
         replay = self.service.write_do("DO-R-1", self.writer())
         self.assertTrue(replay["replayed"])
         self.assertEqual(replay["state"], "inserted")
-        self.assertEqual(len(self.connection.executed), 3)
+        self.assertEqual(len(inserts(self.connection)), 3)
 
     def test_changed_staged_payload_conflicts_with_a_recorded_write(self):
         self.stage()
@@ -143,7 +154,7 @@ class DOWriteServiceTests(unittest.TestCase):
         self.stage(staged_payload(receipt_id="DO-R-2", do_no="DO-0001", transaction_no="TR-0002"))
         with self.assertRaises(Conflict):
             self.service.write_do("DO-R-2", self.writer())
-        self.assertEqual(len(self.connection.executed), 3)
+        self.assertEqual(len(inserts(self.connection)), 3)
 
     def test_duplicate_transaction_no_under_another_receipt_is_rejected(self):
         self.stage()
@@ -158,11 +169,11 @@ class DOWriteServiceTests(unittest.TestCase):
         result = self.service.write_do("DO-R-1", self.writer())
         self.assertEqual(result["state"], "needs_review")
         self.assertFalse(self.connection.rolled_back)
-        executed = len(self.connection.executed)
+        executed = len(inserts(self.connection))
         replay = self.service.write_do("DO-R-1", self.writer())
         self.assertTrue(replay["replayed"])
         self.assertEqual(replay["state"], "needs_review")
-        self.assertEqual(len(self.connection.executed), executed)
+        self.assertEqual(len(inserts(self.connection)), executed)
 
     def test_rejected_mapping_can_be_retried_after_the_cause_is_fixed(self):
         self.stage()
@@ -223,4 +234,4 @@ class DoWriteSourceScopeTests(unittest.TestCase):
         first = self.service.write_do("DO-R-1", self.writer, source="erp")
         second = self.service.write_do("DO-R-1", self.writer, source="eVRP")
         self.assertEqual([first["state"], second["state"]], ["inserted", "inserted"])
-        self.assertEqual(len(self.connection.executed), 6)
+        self.assertEqual(len(inserts(self.connection)), 6)

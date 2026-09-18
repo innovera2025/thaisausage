@@ -329,6 +329,7 @@
         "source": "payload",
         "path": "amount"
       }
-    }
+    },
+    "transaction_no_minimum": 900000
   }
 }

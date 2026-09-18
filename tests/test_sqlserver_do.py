@@ -62,6 +62,11 @@ PAYLOAD = {
 }
 
 
+
+def inserts(connection):
+    """Count only the INSERTs; the writer also asks how many documents share the number."""
+    return [entry for entry in connection.executed if entry[0].startswith("INSERT")]
+
 class FakeCursor:
     def __init__(self, connection):
         self.connection = connection
@@ -70,6 +75,14 @@ class FakeCursor:
         self.connection.executed.append((sql, parameters))
         if self.connection.fail_on == len(self.connection.executed):
             raise RuntimeError("driver failure")
+
+    def fetchone(self):
+        sql = self.connection.executed[-1][0]
+        if "COUNT(*)" in sql:
+            return (1,)  # our own header row, and nobody else's
+        if "MAX(TransactionNo)" in sql:
+            return (5001,)
+        return None
 
 
 class FakeConnection:
@@ -175,7 +188,7 @@ class DOTransactionTests(unittest.TestCase):
         result = writer_for(connection).write(PAYLOAD, "TR-10")
         self.assertEqual(result, {"transaction_no": "TR-10", "header_rows": 1, "detail_rows": 2,
                                   "committed": True})
-        self.assertEqual(len(connection.executed), 3)
+        self.assertEqual(len(inserts(connection)), 3)
         self.assertTrue(connection.committed)
         self.assertFalse(connection.rolled_back)
         self.assertTrue(connection.closed)

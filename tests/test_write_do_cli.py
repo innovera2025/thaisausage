@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
+from thaisausage.contracts import ContractError
 from thaisausage.do_writer import DOWriter
 from thaisausage.service import IntegrationService
 
@@ -34,10 +35,16 @@ PAYLOAD = {"receipt_id": "DO-1", "do_no": "DO-1", "transaction_no": "900001",
            "header": {"do_no": "DO-1"}, "details": [{"item_code": "I-1"}]}
 
 
+
+def inserts(connection):
+    """Count only the INSERTs; the writer also asks how many documents share the number."""
+    return [entry for entry in connection.executed if entry[0].startswith("INSERT")]
+
 class FakeConnection:
-    def __init__(self):
+    def __init__(self, documents_sharing_the_number=1):
         self.executed = []
         self.committed = self.rolled_back = self.closed = False
+        self.documents_sharing_the_number = documents_sharing_the_number
 
     def cursor(self):
         connection = self
@@ -45,6 +52,12 @@ class FakeConnection:
         class Cursor:
             def execute(self, sql, parameters):
                 connection.executed.append((sql, parameters))
+
+            def fetchone(self):
+                sql = connection.executed[-1][0]
+                if "COUNT(*)" in sql:
+                    return (connection.documents_sharing_the_number,)
+                return (5001,) if "MAX(TransactionNo)" in sql else None
         return Cursor()
 
     def commit(self):
@@ -72,7 +85,7 @@ class RehearsalTests(unittest.TestCase):
     def test_rehearsal_executes_then_rolls_back(self):
         result = self.writer(rollback_only=True).write(PAYLOAD, "900001")
         self.assertIs(result["committed"], False)
-        self.assertEqual(len(self.connection.executed), 2)  # the statements really ran
+        self.assertEqual(len(inserts(self.connection)), 2)  # the statements really ran
         self.assertTrue(self.connection.rolled_back)
         self.assertFalse(self.connection.committed)
 
@@ -131,12 +144,15 @@ class AutoTransactionNumberTests(unittest.TestCase):
                 self.sql = sql
 
             def fetchone(self):
+                if "COUNT(*)" in self.sql:
+                    return (self.conn.documents_sharing_the_number,)
                 return (next_no,) if "MAX(TransactionNo)" in self.sql else None
 
         class Connection:
             def __init__(self):
                 self.executed = []
                 self.committed = self.rolled_back = False
+                self.documents_sharing_the_number = 1
 
             def cursor(self):
                 return Cursor(self)
@@ -189,6 +205,33 @@ class AutoTransactionNumberTests(unittest.TestCase):
         writer = DOWriter(CONFIG, connect=lambda config: self.connection())
         result = self.service.attempt_do_write("DO-1", writer, source="eVRP")
         self.assertEqual((result["state"], result["reason"]), ("skipped", "transaction_no_missing"))
+
+    def test_a_number_another_document_already_uses_is_never_committed(self):
+        """On 18-09-26 the ERP application and this writer both took 11504.
+
+        The database cannot object, because RowOrder makes the primary key unique whatever the
+        number is. So the writer asks before committing, and gives the document up instead.
+        """
+        connection = self.connection()
+        connection.documents_sharing_the_number = 2
+        writer = DOWriter({**CONFIG, "transaction_no_source": "auto"},
+                          connect=lambda config: connection)
+        with self.assertRaises(ContractError) as caught:
+            writer.write({"header": {"do_no": "DO-1"}, "details": [{"item_code": "I-1"}]})
+        self.assertIn("2 documents", str(caught.exception))
+        self.assertFalse(connection.committed)
+        self.assertTrue(connection.rolled_back)
+
+    def test_a_reserved_range_is_counted_separately_from_the_erp_numbers(self):
+        writer = self.writer(transaction_no_minimum=900000)
+        writer.write({"header": {"do_no": "DO-1"}, "details": [{"item_code": "I-1"}]})
+        allocate, parameters = self.conn.executed[0]
+        self.assertIn("WHERE TransactionNo >= ?", allocate)
+        self.assertEqual(parameters, (899999, 900000))
+
+    def test_without_a_reserved_range_the_whole_table_is_still_used(self):
+        self.writer().write({"header": {"do_no": "DO-1"}, "details": [{"item_code": "I-1"}]})
+        self.assertNotIn("WHERE", self.conn.executed[0][0])
 
     def test_mapping_is_still_validated_before_connecting(self):
         def refuse(config):
