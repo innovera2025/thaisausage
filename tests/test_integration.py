@@ -485,6 +485,28 @@ class DoCallbackConcurrencyTests(unittest.TestCase):
             self.service.receive_do({**self.payload, "status": "cancelled"}, "eVRP")
 
 
+class LoggingSetupTests(unittest.TestCase):
+    """The sweep's heartbeat is the only sign the schedule is still running."""
+
+    def test_the_entry_point_turns_on_info_logging(self):
+        from thaisausage import __main__ as entry
+        source = Path(entry.__file__).read_text(encoding="utf-8")
+        self.assertIn("logging.basicConfig", source)
+        self.assertIn("THAISAUSAGE_LOG_LEVEL", source)
+
+    def test_a_finished_cycle_is_reported_at_info(self):
+        from thaisausage import __main__ as entry
+        service = Mock()
+        service.sweep_approved_orders.return_value = [{"state": "sent"}, {"state": "needs_review"}]
+        with self.assertLogs("thaisausage.__main__", level="INFO") as captured:
+            entry.run_sweep_cycle({"sync": {"enabled": True}}, service, Mock())
+        self.assertIn("orders=2", captured.output[0])
+
+    def test_nothing_is_logged_while_the_schedule_is_off(self):
+        from thaisausage import __main__ as entry
+        self.assertIsNone(entry.run_sweep_cycle({"sync": {"enabled": False}}, Mock(), Mock()))
+
+
 class DoCallbackWriterBoundaryTests(unittest.TestCase):
     """A staged DO always answers 202; the writer outcome is reported, never raised."""
 

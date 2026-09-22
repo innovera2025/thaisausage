@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import threading
 
 from .api import create_server
@@ -32,6 +33,10 @@ def main():
     parser = argparse.ArgumentParser(description="Thaisausage ERP integration API")
     parser.add_argument("--config", default="config/local.json")
     args = parser.parse_args()
+    # Without this, Python's fallback handler prints warnings and errors only, and the sweep's
+    # once-a-minute line — the one thing that shows the schedule is still alive — is discarded.
+    logging.basicConfig(level=os.environ.get("THAISAUSAGE_LOG_LEVEL", "INFO").upper(),
+                        format="%(asctime)s %(levelname)s %(name)s %(message)s")
     config = load_config(args.config)
     service = IntegrationService(config["database"], config["dry_run"],
                                  VRPConnector(config["vrp"]), ERPConnector(config["erp"]))
