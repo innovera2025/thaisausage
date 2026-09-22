@@ -180,7 +180,8 @@ Content-Type: application/json
 | `POST /api/v1/erp/hooks/order-ready` | ต้อง | 202 | legacy — บันทึก event ลง `erp_hooks` เท่านั้น ไม่ปลุก scheduled worker และไม่ใช่เส้นทางหลัก |
 | `POST /api/v1/erp/orders` | ต้อง | 200/202 | รับ standard SO JSON แล้ว validate และส่งต่อ |
 | `POST /api/v1/erp/pull` | ต้อง | 200/202 | ดึง ERP REST หนึ่งครั้ง แล้ว map, validate และส่งต่อ |
-| `POST /api/v1/vrp/do-received` | ต้อง | 202 | eVRP ส่ง DO เข้า staging |
+| `POST /api/v1/vrp/do-received` | ต้อง | 202 | eVRP ส่ง DO เข้า staging และเขียน ERP ถ้าเปิด `do_write.enabled` |
+| `POST /api/v1/vrp/do-updated` | ต้อง | 202 | eVRP ส่ง DO ฉบับแก้ไข ปรับเอกสารเดิมใน ERP ถ้าเปิด `do_write.update_enabled` |
 | `GET /api/v1/submissions/{request_id}` | ต้อง | 200/404 | ผลที่บันทึกไว้ของการส่งจริง |
 
 ### 7.3 Webhook: `POST /api/v1/erp/hooks/order-ready`
@@ -251,32 +252,35 @@ Field ที่ระบบยังไม่ validate ได้แก่ `custo
 
 eVRP เรียก endpoint นี้เมื่อสร้าง DO เสร็จแล้ว ระบบจะตรวจสอบ `receipt_id`/`do_no`, บันทึก payload ลง `do_receipts` และตอบ `202`. การรับซ้ำด้วยข้อมูลเดิมเป็น replay ที่ปลอดภัย ส่วนข้อมูลเดิมแต่ payload เปลี่ยนจะตอบ `409`.
 
-การรับ DO ในระยะนี้เป็น staging เท่านั้น ไม่ส่งกลับ eVRP และไม่ Insert/Update/Delete ERP. ตัวเขียน `tbl_DOhdr`/`tbl_Dodtl` จะถูกเปิดได้เฉพาะหลังผ่าน UAT และได้รับอนุมัติแยกต่างหาก โดยใช้ `do_write.enabled=true` และ credential สำหรับเขียนคนละชุดกับบัญชีอ่าน SO.
+DO ที่รับเข้ามาจะถูกเก็บลง staging เสมอก่อน แล้วจึงเขียนเข้า ERP ถ้าเปิด `do_write.enabled` — ถ้าปิดอยู่ ต้องสั่งเขียนทีละใบด้วย `python -m thaisausage.write_do` (ดูหัวข้อ 9.1) การเขียนใช้ credential คนละชุดกับบัญชีอ่าน SO เสมอ
 
-ต้องมี `receipt_id` หรือ `do_no` (ยาวไม่เกิน 120) ระบบเก็บ payload เต็มพร้อม hash แล้วตอบ `202` รูปแบบของ field ภายใน `data` ยังรอผลสำรวจจาก ERP
+ต้องมี `receipt_id` หรือ `do_no` (ยาวไม่เกิน 120) ระบบเก็บ payload เต็มพร้อม hash แล้วตอบ `202` รูปแบบของ `header`/`details` อยู่ใน `docs/eVRP_DO_Callback_Spec.md` §9
 
 ตัวอย่าง request:
 
 ```json
 {"receipt_id": "VRP-DO-0001", "do_no": "DO-0001", "status": "completed",
- "data": {"so_no": "SO-0001", "delivered_at": "2026-09-16T12:00:00+07:00"}}
+ "header": {"do_no": "DO-0001", "dodate": "2026-09-22", "cust_code": "CT-MS-BKK-2092"},
+ "details": [{"item_code": "A20-002", "qty": 10, "units": "ลัง", "amount": 5950.00}]}
 ```
 
 ตัวอย่าง response ครั้งแรกและตอนส่งซ้ำ:
 
 ```json
-{"receipt_id": "VRP-DO-0001", "receipt_key": "eVRP:VRP-DO-0001", "source": "eVRP", "state": "staged", "erp_write": false}
-{"receipt_id": "VRP-DO-0001", "receipt_key": "eVRP:VRP-DO-0001", "source": "eVRP", "state": "staged", "erp_write": false, "replayed": true}
+{"receipt_id": "VRP-DO-0001", "receipt_key": "eVRP:VRP-DO-0001", "source": "eVRP", "do_no": "DO-0001", "transaction_no": 900001, "state": "staged", "erp_write": true, "do_write": {"state": "inserted", "transaction_no": 900001}}
+{"receipt_id": "VRP-DO-0001", "receipt_key": "eVRP:VRP-DO-0001", "source": "eVRP", "do_no": "DO-0001", "transaction_no": 900001, "state": "staged", "erp_write": false, "replayed": true}
 ```
 
-เมื่อเปิด `do_write.enabled=true` และ payload มี `transaction_no` ระบบจะพยายามเขียน `tbl_DOhdr`/`tbl_Dodtl` ต่อทันทีหลัง staging แล้วรายงานผลในฟิลด์ `do_write`
+`transaction_no` ที่ระดับบนสุดคือเลขเอกสารใน ERP ซึ่งอ่านจากบันทึกการเขียนของเราเองทุกครั้ง เป็น `null` จนกว่าจะเขียนสำเร็จ และเป็นคีย์ที่ eVRP ใช้อ้างอิงเวลาคุยกับทีม ERP ส่วน `do_no` สะท้อนกลับไปเพราะเป็นตัวระบุเอกสารตอนแก้ไขภายหลัง
+
+เมื่อเปิด `do_write.enabled=true` ระบบจะพยายามเขียน `tbl_DOhdr`/`tbl_Dodtl` ต่อทันทีหลัง staging แล้วรายงานผลในฟิลด์ `do_write`
 หลักการสำคัญคือ **staging ที่สำเร็จตอบ `202` เสมอ** ปัญหาของ writer ไม่เปลี่ยน HTTP status และ `erp_write` เป็น boolean ที่เป็น `true` เฉพาะตอน `do_write.state = inserted` เท่านั้น
 
 | `do_write.state` | ความหมาย | `erp_write` |
 |---|---|---|
 | `inserted` | เขียน Header/Detail สำเร็จและ commit แล้ว | `true` |
 | `disabled` | `do_write.enabled=false` | `false` |
-| `skipped` | ไม่มี `transaction_no` ใน payload จึงไม่เรียก writer | `false` |
+| `skipped` | ไม่มีใครออกเลข `TransactionNo` ได้ — payload ไม่ส่งมา และ writer ไม่ได้ตั้งให้จัดสรรเอง | `false` |
 | `rejected` | mapping/ข้อมูลไม่ผ่าน validate ไม่มี SQL ถูกส่ง | `false` |
 | `conflict` | `do_no` หรือ `transaction_no` ถูกใช้โดย receipt อื่น | `false` |
 | `needs_review` | ผลไม่แน่นอน เช่น timeout ระหว่าง commit | `false` |
@@ -286,13 +290,39 @@ identity ที่ใช้จริงคือ `receipt_key = "<source>:<recei
 การรับซ้ำจอง identity ภายใน transaction เดียว (`BEGIN IMMEDIATE`) callback ที่มาพร้อมกันจึงได้ `202` พร้อม `replayed: true` ไม่ใช่ 500
 eVRP ต้องใช้ `receipt_id` เดิมทุกครั้งที่ส่ง DO ใบเดิมซ้ำ
 
-endpoint นี้ไม่เขียน ERP ไม่ว่ากรณีใด การเขียน DO เข้า ERP เป็นงานแยกที่ต้องเรียกภายในเท่านั้น (ดูหัวข้อ 9.1) และยังไม่มี endpoint สาธารณะ
+เส้นทางฝั่ง ERP (`/api/v1/erp/do-received`) ไม่เรียก writer เลยไม่ว่ากรณีใด
 
-### 7.7 ตรวจสถานะ: `GET /api/v1/submissions/{request_id}`
+### 7.7 DO ฉบับแก้ไข: `POST /api/v1/vrp/do-updated`
+
+ใช้เมื่อ DO ที่เคยส่งมาแล้วมีการเปลี่ยนแปลง แยกเส้นทางจากการสร้างเพราะเส้นสร้างถูกออกแบบให้ **ปฏิเสธ** การแก้ (`409` เมื่อ `receipt_id` เดิมมาพร้อมข้อมูลใหม่) ซึ่งเป็นเกราะกันข้อมูลเพี้ยนที่ต้องคงไว้
+
+eVRP ส่ง `receipt_id` ใหม่ + `do_no` เดิม + `header`/`details` ฉบับสมบูรณ์ ระบบจะ
+
+1. เก็บ payload ลง staging เหมือนทุก callback
+2. ค้น `TransactionNo` จากตาราง `do_writes` ด้วย `do_no` — **ไม่รับเลขจาก payload** เพื่อไม่ให้ค่าจากภายนอกชี้ไปเอกสารใบอื่นใน ERP
+3. ตรวจว่าเอกสารยังแก้ได้ (`IsApproved`/`IsClosed`/`IsAcc` ต้องเป็น 0 และต้องมีแถวเดียว)
+4. `UPDATE` หัวเอกสารในที่เดิม แล้ว `DELETE` + `INSERT` รายการสินค้าใหม่ทั้งชุด ในทรานแซกชันเดียว
+
+| `do_update.state` | ความหมาย | `erp_write` |
+|---|---|---|
+| `updated` | แก้และ commit สำเร็จ | `true` |
+| `disabled` | `do_write.update_enabled=false` | `false` |
+| `rejected` | `do_no_not_written`, เอกสารถูกอนุมัติ/ปิด/ลงบัญชี, หรือ mapping ไม่ผ่าน | `false` |
+| `conflict` | `receipt_id` เดิมมาพร้อมข้อมูลต่าง | `false` |
+| `needs_review` | ผลไม่แน่นอน เช่น timeout ระหว่าง commit | `false` |
+
+บันทึกอยู่ในตาราง `do_updates` แยกจาก `do_writes` การส่งซ้ำด้วย `receipt_id` และข้อมูลเดิมจะได้ `replayed: true` โดยไม่แก้ซ้ำ
+
+ข้อตกลงที่มีผล (ยืนยัน 22 ก.ย. 2026)
+
+- **ข้อมูลจาก eVRP ถือเป็นฉบับจริง** ถ้าทีม ERP แก้เอกสารด้วยมือไว้ แล้ว eVRP ส่งฉบับแก้มาทีหลัง การแก้ของทีม ERP จะถูกทับ วิธีล็อกคือให้ ERP Approve หรือ Close เอกสารนั้น ระบบจะปฏิเสธการแก้ทันที
+- **การยกเลิก DO เป็นสิทธิ์ของทีม ERP เท่านั้น** ระบบนี้ไม่ยกเลิกเอกสารให้ไม่ว่ากรณีใด และไม่มี endpoint สำหรับยกเลิก
+
+### 7.8 ตรวจสถานะ: `GET /api/v1/submissions/{request_id}`
 
 endpoint นี้คืนผลที่บันทึกไว้ใน SQLite ซึ่งมีเฉพาะการส่งในโหมด live ดังนั้นในโหมด dry-run จะได้ 404 เสมอ
 
-### 7.8 HTTP status
+### 7.9 HTTP status
 
 | HTTP | ความหมาย | สิ่งที่ผู้เรียกควรทำ |
 |---|---|---|
@@ -305,7 +335,7 @@ endpoint นี้คืนผลที่บันทึกไว้ใน SQLi
 | 502 | เรียก ERP REST ไม่สำเร็จ (`/erp/pull`) | retry ตามนโยบายของ operator |
 | 500 | internal error | แจ้งผู้ดูแลระบบ |
 
-### 7.9 สถานะ submission และ hook
+### 7.10 สถานะ submission และ hook
 
 | State | ใช้กับ | ความหมาย |
 |---|---|---|
@@ -384,12 +414,18 @@ docker compose -f deploy/docker-compose.yml exec thaisausage python -c "import j
 
 ### 9.1 DO writer เข้า ERP (`do_write`)
 
-สถานะ: 🔨 CODE DONE — โครงสร้างพร้อมและมี test แต่ยังไม่มี mapping จริงและยังไม่เคยเขียน ERP
-รายละเอียด mapping ทั้งหมดอยู่ใน `docs/do-insert-contract.md`
+สถานะ: ✅ VERIFIED — mapping ครบ 79 คอลัมน์ และเขียนเข้า ERP จริงแล้ว 2 ใบ ตรวจกลับตรงทุกคอลัมน์
+(ดู `process/features/erp-sqlserver/reports/do-write-18-09-26.md`) mapping ที่ใช้อยู่ใน
+`config/do-write-template.json` ส่วนที่มาของแต่ละคอลัมน์อธิบายไว้ใน `docs/eVRP_DO_Callback_Spec.md` §9
+
+**`TransactionNo` ไม่ใช่ identity และไม่มี default** — ต้องมีคนออกเลข แอป ERP ใช้ `MAX+1` และ
+ระบบเราก็เคยใช้แบบเดียวกันจนเกิดเลขชนกันจริงเมื่อ 18 ก.ย. 2026 ปัจจุบันจึงนับเลขเฉพาะในช่วงที่ทีม ERP
+กันไว้ให้ (`transaction_no_minimum: 900000`) และตรวจก่อน commit ว่าเลขนั้นมีเอกสารเดียว
 
 กติกาความปลอดภัยที่บังคับในโค้ด:
 
-- ค่าเริ่มต้น `do_write.enabled=false` เปิดได้จาก config เท่านั้น ห้ามเปิดจาก payload และยังไม่มี endpoint สาธารณะ
+- ค่าเริ่มต้น `do_write.enabled=false` และ `do_write.update_enabled=false` เปิดได้จาก config เท่านั้น ห้ามเปิดจาก payload
+- การแก้เอกสารเดิมมี flag แยกของตัวเอง เพราะการแทนที่รายการสินค้าคือคำสั่ง `DELETE` จริงกับ ERP
 - ต้องใช้ credential คนละชุดกับบัญชี read-only ถ้าตั้ง env เดียวกับ `ERP_SQL_USER`/`ERP_SQL_PASSWORD`/`ERP_SQLSERVER_CONNECTION_STRING` ระบบจะปฏิเสธ
 - validate mapping และ payload ให้เสร็จก่อนเปิด connection เสมอ
 - ชื่อตารางและคอลัมน์มาจาก config ที่ review แล้ว ค่าทุกค่าถูกผูกเป็น parameter ไม่มีการต่อ string จาก payload
@@ -404,8 +440,11 @@ docker compose -f deploy/docker-compose.yml exec thaisausage python -c "import j
 | `preview` | dry-run ตรวจ mapping แล้ว ไม่ได้เขียน | ได้ |
 | `disabled` | flag ปิดอยู่ | ได้ |
 | `rejected` | validate ไม่ผ่าน ไม่มี SQL ถูกส่ง | ได้ (หลังแก้สาเหตุ) |
+| `rehearsed` | รัน INSERT จริงแล้ว rollback — พิสูจน์สิทธิ์และ mapping โดยไม่ทิ้งข้อมูล | ได้ |
 | `inserted` | commit สำเร็จ | ไม่ได้ |
 | `needs_review` | ผลไม่แน่นอน เช่น timeout ระหว่าง commit | ไม่ได้ ต้องตรวจ ERP ด้วยมือก่อน |
+
+ตาราง `do_updates` เก็บสถานะการแก้เอกสารแยกต่างหาก ใช้สถานะชุดเดียวกันโดยมี `updated` แทน `inserted`
 
 การกันซ้ำใช้ `receipt_id` เป็น primary key พร้อม unique index บน `do_no` และ `transaction_no`
 ถ้า payload ของ receipt เดิมเปลี่ยนหลังเคยเขียนแล้วจะได้ conflict ไม่ใช่การเขียนซ้ำ
@@ -579,6 +618,47 @@ docker compose -f deploy/docker-compose.yml exec -T thaisausage \
 
 อ่านเฉพาะ `INFORMATION_SCHEMA` และ `sys.*` ผ่าน SELECT guard เดิม ไม่แตะข้อมูลธุรกิจ
 เขียนผลลง `/app/data/` (volume) เพราะ `/tmp` เป็น tmpfs ที่ `docker cp` อ่านไม่ได้
+
+## 12.8 สรุปสถานะประจำวัน (`status`)
+
+ตอบคำถามที่ต้องถามทุกเช้า: ตัวกวาดยังทำงานไหม ส่ง SO ไปกี่ใบ อะไรค้าง DO เข้ามากี่ใบ อะไรต้องให้คนดู
+
+```sh
+docker compose -f deploy/docker-compose.yml exec -T thaisausage \
+  python -m thaisausage.status --config /app/config/local.json --days 7
+```
+
+อ่านจาก SQLite ของเราอย่างเดียว ไม่ต่อ ERP ไม่ต่อ eVRP รันได้ตลอดเวลา สถานะที่ต้องให้คนดูจะมี `<<` กำกับ
+และ SO ที่ส่งไม่สำเร็จจะแสดงเลข SO พร้อมรหัสและข้อความ error จาก eVRP ตรงๆ ไม่ใช่แค่ว่าล้มเหลว
+
+## 12.9 ตรวจเอกสารที่เขียนไปแล้ว (`verify_do`)
+
+จำนวนแถวบอกได้แค่ว่ามีข้อมูลเข้าไป ไม่ได้บอกว่าค่าลงถูกช่อง คำสั่งนี้อ่านเอกสารกลับจาก ERP แล้ววางเทียบ
+กับสิ่งที่เราส่งทีละคอลัมน์
+
+```sh
+docker compose -f deploy/docker-compose.yml exec -T thaisausage \
+  python -m thaisausage.verify_do --config /app/config/local.json \
+    --transaction-no 900000 --receipt-id TEST-ERP-002
+```
+
+ใช้ credential ฝั่งอ่านและเป็น `SELECT` ธรรมดาผ่าน guard เดิม `TransactionNo` ผูกเป็น parameter
+การเทียบดูที่ความหมายไม่ใช่ตัวอักษรดิบ — ERP เติมช่องว่างท้ายข้อความ คืนเงินเป็น `Decimal` และวันที่เป็น
+`datetime` จึงไม่ฟ้องผิดพลาดลวง คอลัมน์ที่ว่างทั้งสองฝั่งถูกซ่อน เติม `--all-columns` เพื่อดูครบทั้ง 79
+ตัดคำสั่งย่อย `--receipt-id` ออกได้ จะกลายเป็นแค่เปิดดูเอกสารใน ERP ใช้ตรวจใบที่ทีม ERP คีย์เองก็ได้
+
+## 12.10 ประกอบ config กลับจาก git (`assemble_config`)
+
+`config/local.json` ไม่ได้อยู่ใน git เพราะแก้ที่เครื่องจริง แต่สองซีกของมันอยู่ใน git ทั้งคู่ —
+`config/production.json` (ค่าตั้งค่าและ SQL ที่ผ่านการตรวจ) กับ `config/do-write-template.json` (mapping)
+
+```sh
+python3 deploy/assemble_config.py            # สร้าง config/local.json ใหม่
+python3 deploy/assemble_config.py --check    # เทียบว่าที่ใช้อยู่ตรงกับ git ไหม
+```
+
+ไฟล์ที่ประกอบได้จะปิดการเขียน DO ไว้เสมอ เครื่องที่เพิ่งกู้คืนจึงไม่เริ่มเขียน ERP เอง
+ทั้งสองไฟล์เก็บแค่ *ชื่อ* ตัวแปรสภาพแวดล้อม ไม่มีรหัสผ่านอยู่ใน git
 
 ## 13. การทดสอบ
 
