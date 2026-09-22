@@ -63,12 +63,12 @@
       "quantity": "quantity",
       "unit_price": "unit_price"
     }
-  }
-  ,"sync": {
+  },
+  "sync": {
     "enabled": false,
     "interval_seconds": 60
-  }
-  ,"do_write": {
+  },
+  "do_write": {
     "enabled": false,
     "header_table": "",
     "detail_table": "",
@@ -80,6 +80,7 @@
     "query_timeout_seconds": 30,
     "detail_line_start": 1,
     "header_columns": {},
-    "detail_columns": {}
+    "detail_columns": {},
+    "update_enabled": false
   }
 }

@@ -175,7 +175,7 @@ class IntegrationTests(unittest.TestCase):
     def test_do_is_staged_without_erp_write(self):
         result = self.service.receive_do({"receipt_id": "DO-1", "do_no": "DO-1", "status": "delivered"})
         self.assertEqual(result, {"receipt_id": "DO-1", "receipt_key": "erp:DO-1", "source": "erp",
-                                  "state": "staged", "erp_write": False})
+                                  "do_no": "DO-1", "state": "staged", "erp_write": False})
         replay = self.service.receive_do({"receipt_id": "DO-1", "do_no": "DO-1", "status": "delivered"})
         self.assertTrue(replay["replayed"])
         self.assertIs(replay["erp_write"], False)  # Every accepted DO answer states the ERP boundary.
@@ -517,6 +517,29 @@ class DoCallbackWriterBoundaryTests(unittest.TestCase):
     def staged_rows(self):
         with sqlite3.connect(self.database) as db:
             return db.execute("SELECT receipt_key,state FROM do_receipts ORDER BY receipt_key").fetchall()
+
+    def test_the_answer_carries_the_erp_key_for_a_later_revision(self):
+        url = self.serve(DOWriter(self.config["do_write"]))
+        self.post(url, {"receipt_id": "D0", "do_no": "DO-0", "header": {"do_no": "DO-0"},
+                        "details": [{"item_code": "I-1"}]})
+        with sqlite3.connect(self.database) as db:  # stand in for a write that already happened
+            db.execute("INSERT INTO do_writes VALUES ('eVRP:D0','eVRP','D0','DO-0','900001',"
+                       "'hash','inserted',NULL,'2026-09-22T00:00:00Z')")
+        status, result = self.post(url, {"receipt_id": "D0", "do_no": "DO-0",
+                                         "header": {"do_no": "DO-0"}, "details": [{"item_code": "I-1"}]})
+        self.assertEqual(status, 202)
+        self.assertEqual(result["transaction_no"], "900001")
+        self.assertEqual(result["do_no"], "DO-0")
+
+    def test_a_revision_of_an_unwritten_do_is_accepted_but_changes_nothing(self):
+        writer = DOWriter({**self.config["do_write"], "enabled": True, "update_enabled": True})
+        url = self.serve(writer).replace("do-received", "do-updated")
+        status, result = self.post(url, {"receipt_id": "D9-R2", "do_no": "DO-9",
+                                         "header": {"do_no": "DO-9"}, "details": [{"item_code": "I-1"}]})
+        self.assertEqual(status, 202)  # staged for inspection, like every other accepted callback
+        self.assertIs(result["erp_write"], False)
+        self.assertEqual(result["do_update"]["reason"], "do_no_not_written")
+        self.assertIsNone(result["transaction_no"])
 
     def test_disabled_writer_keeps_erp_write_false(self):
         url = self.serve(DOWriter(self.config["do_write"]))  # enabled=false, exactly as deployed

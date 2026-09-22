@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from .connectors import RemoteError
-from .contracts import ContractError, validate_orders
+from .contracts import ContractError, require, text, validate_orders
 from .do_writer import DOWriteAmbiguous, DOWriteDisabled
 
 
@@ -70,6 +70,11 @@ class IntegrationService:
                     ON do_writes(do_no) WHERE do_no IS NOT NULL;
                 CREATE UNIQUE INDEX IF NOT EXISTS do_writes_transaction_no
                     ON do_writes(transaction_no) WHERE transaction_no IS NOT NULL;
+                CREATE TABLE IF NOT EXISTS do_updates (
+                    receipt_key TEXT PRIMARY KEY, source TEXT NOT NULL, receipt_id TEXT NOT NULL,
+                    do_no TEXT, transaction_no TEXT, payload_hash TEXT NOT NULL,
+                    state TEXT NOT NULL, reason TEXT, updated_at TEXT NOT NULL
+                );
             """)
         finally:
             db.close()
@@ -182,7 +187,9 @@ class IntegrationService:
         require(do_no is None or text(do_no), "do_no must be a non-empty string when supplied")
         digest = hashlib.sha256(canonical(payload).encode()).hexdigest()
         key = receipt_key(source, receipt_id)
-        answer = {"receipt_id": receipt_id, "receipt_key": key, "source": source, "erp_write": False}
+        # do_no is echoed because it is how a later revision names the document it is revising.
+        answer = {"receipt_id": receipt_id, "receipt_key": key, "source": source,
+                  "do_no": do_no, "erp_write": False}
         db = self.connect()
         try:
             db.execute("BEGIN IMMEDIATE")
@@ -287,6 +294,112 @@ class IntegrationService:
         return {"receipt_id": receipt_id, "receipt_key": key, "source": source,
                 "state": state, "reason": reason,
                 "transaction_no": transaction_no, **detail}
+
+    def written_document(self, do_no):
+        """The ERP number a delivery order was written under, if it was written at all.
+
+        The number is looked up here rather than read from the request, so a caller can only ever
+        change a document this system created, and only the one that carries that DO number.
+        """
+        if not text(do_no):
+            return None
+        db = self.connect()
+        try:
+            row = db.execute("SELECT transaction_no,state FROM do_writes WHERE do_no=?",
+                             (do_no,)).fetchone()
+        finally:
+            db.close()
+        if not row or row[1] != "inserted" or not row[0]:
+            return None
+        return row[0]
+
+    def update_do(self, receipt_id, writer, source="eVRP"):
+        """Apply one staged revision to the document ERP already holds.
+
+        Returns None when the revision was never staged. The ERP number comes from our own record
+        of the original write, never from the payload.
+        """
+        require(text(receipt_id), "receipt_id is required")
+        require(text(source), "DO source is required")
+        key = receipt_key(source, receipt_id)
+        db = self.connect()
+        try:
+            row = db.execute("SELECT payload,payload_hash,do_no FROM do_receipts WHERE receipt_key=?",
+                             (key,)).fetchone()
+        finally:
+            db.close()
+        if not row:
+            return None
+        payload, digest, staged_do_no = json.loads(row[0]), row[1], row[2]
+        do_no = payload.get("do_no") or staged_do_no
+        transaction_no = self.written_document(do_no)
+        answer = {"receipt_id": receipt_id, "receipt_key": key, "source": source, "do_no": do_no}
+        if transaction_no is None:
+            # Nothing to revise: this DO number was never written into ERP from here.
+            return dict(answer, state="rejected", reason="do_no_not_written", transaction_no=None)
+
+        now = datetime.now(timezone.utc).isoformat()
+        db = self.connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            claimed = db.execute("SELECT state,payload_hash,reason FROM do_updates WHERE receipt_key=?",
+                                 (key,)).fetchone()
+            if claimed:
+                if claimed[1] != digest:
+                    raise Conflict("receipt_id already applied with different data")
+                if claimed[0] not in self.RETRYABLE_WRITE_STATES:
+                    return dict(answer, state=claimed[0], reason=claimed[2],
+                                transaction_no=transaction_no, replayed=True)
+                db.execute("UPDATE do_updates SET state='pending',reason=NULL,updated_at=? WHERE receipt_key=?",
+                           (now, key))
+            else:
+                db.execute("INSERT INTO do_updates VALUES (?,?,?,?,?,?,?,?,?)",
+                           (key, source, receipt_id, do_no, transaction_no, digest, "pending", None, now))
+            db.commit()
+        finally:
+            db.close()
+
+        detail = {}
+        try:
+            if self.dry_run:
+                state, reason = "preview", "dry_run_preview"
+            else:
+                detail = writer.update(payload, transaction_no)
+                state = "updated" if detail.get("committed") else "rehearsed"
+                reason = None if state == "updated" else "rollback_only"
+        except DOWriteDisabled:
+            state, reason = "disabled", "do_update_disabled"
+        except DOWriteAmbiguous as error:
+            state, reason = "needs_review", str(error)
+        except ContractError as error:
+            state, reason = "rejected", str(error)
+        except Exception as error:
+            state, reason = "needs_review", type(error).__name__
+        db = self.connect()
+        try:
+            with db:
+                db.execute("UPDATE do_updates SET state=?,reason=?,updated_at=? WHERE receipt_key=?",
+                           (state, reason, datetime.now(timezone.utc).isoformat(), key))
+        finally:
+            db.close()
+        if reason:
+            logger.warning("do update receipt=%s state=%s reason=%s", safe_identifier(key), state, reason)
+        return {**answer, **detail, "state": state, "reason": reason,
+                "transaction_no": transaction_no}
+
+    def attempt_do_update(self, receipt_id, writer, source="eVRP"):
+        """Try an update without letting its outcome change the staging answer."""
+        try:
+            result = self.update_do(receipt_id, writer, source=source)
+            if result is None:
+                result = {"state": "skipped", "reason": "receipt_not_staged"}
+        except Conflict as error:
+            result = {"state": "conflict", "reason": str(error)}
+        except ContractError as error:
+            result = {"state": "rejected", "reason": str(error)}
+        except Exception as error:
+            result = {"state": "needs_review", "reason": type(error).__name__}
+        return result
 
     def attempt_do_write(self, receipt_id, writer, source, transaction_no=None):
         """Try an ERP DO write without letting its outcome change the staging answer.

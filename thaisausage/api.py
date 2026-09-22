@@ -122,7 +122,7 @@ def create_server(config, service, on_hook_received=None, do_writer=None):
                 return
             try:
                 path = urlsplit(self.path).path
-                if path not in ("/api/v1/erp/orders", "/api/v1/erp/pull", "/api/v1/erp/hooks/order-ready", "/api/v1/erp/do-received", "/api/v1/vrp/do-received"):
+                if path not in ("/api/v1/erp/orders", "/api/v1/erp/pull", "/api/v1/erp/hooks/order-ready", "/api/v1/erp/do-received", "/api/v1/vrp/do-received", "/api/v1/vrp/do-updated"):
                     return self.reply(404, {"error": "not_found"})
                 payload = self.body()
                 if path == "/api/v1/erp/hooks/order-ready":
@@ -146,6 +146,22 @@ def create_server(config, service, on_hook_received=None, do_writer=None):
                             ("state", "reason", "transaction_no", "header_rows", "detail_rows", "statements")
                             if write_result.get(key) is not None
                         }
+                    # The ERP key, at the top level, whether it arrived just now or on an earlier
+                    # call: it is what a later revision of this document has to quote back.
+                    result["transaction_no"] = service.written_document(result.get("do_no"))
+                    return self.reply(202, result)
+                if path == "/api/v1/vrp/do-updated":
+                    result = service.receive_do(payload, "eVRP")
+                    result["erp_write"] = False
+                    if do_writer is not None:
+                        update_result = service.attempt_do_update(result["receipt_id"], do_writer, "eVRP")
+                        result["erp_write"] = update_result["state"] == "updated"
+                        result["do_update"] = {
+                            key: update_result[key] for key in
+                            ("state", "reason", "transaction_no", "header_rows", "detail_rows")
+                            if update_result.get(key) is not None
+                        }
+                    result["transaction_no"] = service.written_document(result.get("do_no"))
                     return self.reply(202, result)
                 if path == "/api/v1/erp/pull":
                     require(text(payload.get("request_id")), "request_id is required")

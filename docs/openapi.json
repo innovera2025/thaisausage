@@ -187,7 +187,37 @@
         },
         "responses": {
           "202": {
-            "description": "Staged; ตอบ {receipt_id, receipt_key, source:\"eVRP\", state, erp_write:false} และ replayed:true เมื่อส่งซ้ำ. เมื่อเปิด do_write ระบบจะพยายาม Insert ERP แล้วรายงานผลใน do_write:{state, reason, ...} โดย erp_write เป็น true เฉพาะเมื่อ state=inserted; ปัญหาของ writer ไม่เปลี่ยน HTTP status ของ callback"
+            "description": "Staged; ตอบ {receipt_id, receipt_key, source:\"eVRP\", do_no, transaction_no, state, erp_write:false} และ replayed:true เมื่อส่งซ้ำ. transaction_no คือเลขเอกสารใน ERP ซึ่งเป็น null จนกว่าจะเขียนสำเร็จ และเป็นคีย์ที่ต้องใช้อ้างอิงเมื่อจะแก้เอกสารภายหลัง. เมื่อเปิด do_write ระบบจะพยายาม Insert ERP แล้วรายงานผลใน do_write:{state, reason, ...} โดย erp_write เป็น true เฉพาะเมื่อ state=inserted; ปัญหาของ writer ไม่เปลี่ยน HTTP status ของ callback"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          }
+        }
+      }
+    },
+    "/api/v1/vrp/do-updated": {
+      "post": {
+        "summary": "รับ DO ฉบับแก้ไขจาก eVRP และปรับเอกสารเดิมใน ERP",
+        "description": "ใช้เมื่อ DO ที่เคยส่งมาแล้วมีการเปลี่ยนแปลง. ส่ง receipt_id ใหม่ (คนละค่ากับครั้งสร้าง) พร้อม do_no เดิม และ header/details ฉบับล่าสุดทั้งชุด. ระบบค้นเลข TransactionNo จากบันทึกการเขียนของตัวเอง ไม่รับเลขจาก payload, แล้วแก้หัวเอกสารในที่เดิมและแทนที่รายการสินค้าทั้งหมดในทรานแซกชันเดียว. ปฏิเสธเมื่อเอกสารถูก Approve/Close หรือลงบัญชีแล้ว, เมื่อ do_no ไม่เคยถูกเขียนเข้า ERP จากระบบนี้, หรือเมื่อ do_write.update_enabled=false",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DoReceipt"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "รับไว้แล้ว; ตอบ {receipt_id, receipt_key, source:\"eVRP\", do_no, transaction_no, state, erp_write} พร้อม do_update:{state, reason, header_rows, detail_rows}. state=updated เมื่อแก้สำเร็จ, rejected พร้อม reason เมื่อปฏิเสธ (เช่น do_no_not_written หรือเอกสารถูกอนุมัติแล้ว), disabled เมื่อยังไม่เปิดใช้งาน. เหมือน do-received คือการแก้ที่ไม่สำเร็จไม่เปลี่ยน HTTP status"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"

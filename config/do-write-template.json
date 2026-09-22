@@ -336,6 +336,7 @@
         "path": "amount"
       }
     },
-    "transaction_no_minimum": 900000
+    "transaction_no_minimum": 900000,
+    "update_enabled": false
   }
 }

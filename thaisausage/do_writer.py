@@ -81,6 +81,41 @@ def build_insert(table, columns, source, transaction_no, line_no=None):
     return sql, tuple(parameters)
 
 
+def build_update(table, columns, source, transaction_no):
+    """Return (sql, parameters) that rewrites one existing header row.
+
+    TransactionNo identifies the row, so it is the condition rather than a value, and the creation
+    timestamp is left as it was. Everything else the mapping owns is rewritten, so the row ends up
+    saying exactly what the payload says.
+    """
+    require(text(table), "do_write target table is not configured")
+    require(isinstance(columns, dict) and columns, "do_write column mapping is not configured")
+    assignments, parameters = [], []
+    for column, spec in columns.items():
+        _column(column)
+        require(isinstance(spec, dict), column + " mapping must be an object")
+        kind = spec.get("source")
+        if kind in ("transaction_no", "server_time", "line_no"):
+            continue
+        if kind == "fixed":
+            value = spec.get("value")
+        elif kind == "payload":
+            require(text(spec.get("path")), column + " payload mapping requires a path")
+            value = lookup(source, spec["path"])
+            if value is None and "default" in spec:
+                value = spec["default"]
+        else:
+            raise ContractError(column + " mapping source must be payload, fixed, transaction_no, line_no or server_time")
+        if value is None and spec.get("required"):
+            raise ContractError(column + " is required by the reviewed mapping")
+        assignments.append(column + " = ?")
+        parameters.append(_bindable(column, value))
+    require(assignments, "the reviewed mapping leaves nothing to update")
+    sql = "UPDATE %s SET %s WHERE TransactionNo = ?" % (
+        approved_identifier(table), ", ".join(assignments))
+    return sql, tuple(parameters) + (transaction_no,)
+
+
 class DOWriter:
     """Transactional Header/Detail writer behind an explicit configuration flag."""
 
@@ -231,3 +266,88 @@ class DOWriter:
                 pass  # The transaction already resolved; closing is best effort.
         return {"transaction_no": transaction_no, "header_rows": 1,
                 "detail_rows": len(statements) - 1, "committed": True}
+
+    @property
+    def update_enabled(self):
+        """Changing a document ERP already holds is a separate permission from creating one."""
+        return self.config.get("update_enabled") is True
+
+    def assert_can_be_updated(self, connection, transaction_no):
+        """Refuse to touch a document that is no longer ours to change.
+
+        Once ERP has approved, closed or accounted a delivery order it belongs to their process.
+        Two rows sharing the number means something went wrong earlier and a person has to look.
+        """
+        table = approved_identifier(self.config.get("header_table") or "")
+        cursor = connection.cursor()
+        cursor.execute("SELECT IsApproved, IsClosed, IsAcc FROM %s WHERE TransactionNo = ?" % table,
+                       (transaction_no,))
+        found = cursor.fetchall()
+        if len(found) != 1:
+            raise ContractError("TransactionNo %s matches %d documents in ERP; refusing to update"
+                                % (transaction_no, len(found)))
+        approved, closed, accounted = (int(value or 0) for value in found[0])
+        if approved or closed or accounted:
+            raise ContractError("document %s is approved, closed or already in accounting; "
+                                "it can no longer be changed from here" % transaction_no)
+
+    def update(self, payload, transaction_no):
+        """Rewrite a document ERP already holds: header in place, detail lines replaced.
+
+        The lines are replaced rather than matched one by one, because eVRP sends the document it
+        now believes in, not a list of edits. That means a DELETE, which is why this needs a flag
+        of its own; it happens in the same transaction as the rewrite, so a failure anywhere
+        leaves the document exactly as it was.
+        """
+        if not self.enabled:
+            raise DOWriteDisabled("do_write.enabled is false")
+        if not self.update_enabled:
+            raise DOWriteDisabled("do_write.update_enabled is false")
+        require(isinstance(transaction_no, int) or text(transaction_no), "transaction_no is required")
+        header = payload.get("header")
+        require(isinstance(header, dict), "DO payload requires a header object")
+        details = payload.get("details")
+        require(isinstance(details, list) and details, "DO payload requires at least one detail line")
+
+        rewrite = build_update(self.config.get("header_table"), self.config.get("header_columns"),
+                               header, transaction_no)
+        detail_table = approved_identifier(self.config.get("detail_table") or "")
+        start = int(self.config.get("detail_line_start", 1))
+        inserts = []
+        for index, line in enumerate(details):
+            require(isinstance(line, dict), "each DO detail line must be an object")
+            inserts.append(build_insert(self.config.get("detail_table"),
+                                        self.config.get("detail_columns"), line,
+                                        transaction_no, line_no=start + index))
+
+        rehearsal = self.config.get("rollback_only") is True
+        connection = self.connect()
+        commit_started = False
+        try:
+            self.assert_can_be_updated(connection, transaction_no)
+            cursor = connection.cursor()
+            cursor.execute(*rewrite)
+            cursor.execute("DELETE FROM %s WHERE TransactionNo = ?" % detail_table, (transaction_no,))
+            for sql, parameters in inserts:
+                cursor.execute(sql, parameters)
+            if rehearsal:
+                connection.rollback()
+                return {"transaction_no": transaction_no, "header_rows": 1,
+                        "detail_rows": len(inserts), "committed": False}
+            commit_started = True
+            connection.commit()
+        except Exception:
+            if commit_started:
+                raise DOWriteAmbiguous("commit outcome is unknown")
+            try:
+                connection.rollback()
+            except Exception:
+                raise DOWriteAmbiguous("rollback failed after an update error")
+            raise
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass  # The transaction already resolved; closing is best effort.
+        return {"transaction_no": transaction_no, "header_rows": 1,
+                "detail_rows": len(inserts), "committed": True}
