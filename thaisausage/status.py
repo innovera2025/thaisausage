@@ -46,16 +46,47 @@ def section(title, pairs, empty):
         print("  %-18s %6d%s" % (name or "(ไม่ระบุ)", count, mark))
 
 
-def reason_of(result):
-    """Pull a short reason out of a stored result without trusting its shape."""
+def parsed(value):
+    """JSON if it is JSON, otherwise the value itself; stored results are not always objects."""
+    if isinstance(value, (dict, list)):
+        return value
     try:
-        data = json.loads(result)
+        return json.loads(value)
     except (TypeError, ValueError):
-        return str(result)[:80]
-    for key in ("upstream_error", "reason", "error", "detail"):
-        if isinstance(data, dict) and data.get(key):
-            return str(data[key])[:80]
-    return json.dumps(data, ensure_ascii=False)[:80]
+        return None
+
+
+def reasons(result):
+    """Say why a submission failed, in eVRP's own words.
+
+    eVRP answers a rejection with a per-order list of field errors, stored as a JSON string
+    inside the result. Truncating that string shows only the envelope, which is the same for
+    every failure and says nothing. This digs out the part that differs.
+    """
+    data = parsed(result)
+    if not isinstance(data, dict):
+        return [str(result)[:160]]
+    detail = parsed(data.get("upstream_error")) or {}
+    lines = []
+    if isinstance(detail, dict):
+        for order in detail.get("results") or []:
+            if not isinstance(order, dict):
+                continue
+            for error in order.get("errors") or []:
+                if not isinstance(error, dict):
+                    continue
+                lines.append("%s · %s · %s" % (
+                    order.get("order_no") or "?",
+                    error.get("code") or error.get("field") or "?",
+                    (error.get("message") or "").strip()))
+        for error in detail.get("global_errors") or []:
+            lines.append(str(error)[:160])
+    if lines:
+        return lines
+    for key in ("reason", "error", "detail", "upstream_error"):
+        if data.get(key):
+            return [str(data[key])[:160]]
+    return [json.dumps(data, ensure_ascii=False)[:160]]
 
 
 def main():
@@ -106,7 +137,8 @@ def main():
             print("  ไม่มี")
         for request_id, result, created_at in failures:
             print("  %-42s %s" % (request_id, created_at))
-            print("    %s" % reason_of(result))
+            for line in reasons(result):
+                print("    %s" % line[:150])
 
         latest = rows(db, "SELECT MAX(created_at) FROM submissions")
         print("\nส่ง SO ครั้งล่าสุด :", (latest[0][0] if latest and latest[0][0] else "ยังไม่เคยส่ง"))
