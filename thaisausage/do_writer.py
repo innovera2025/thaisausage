@@ -30,14 +30,16 @@ _VALUE_TAIL = re.compile(r"(?i)\btruncated value\b.*", re.S)
 def statement_error(error):
     """A driver complaint an operator can act on, with nothing private left in it.
 
-    Data and integrity errors name the table and column that refused the value, which is the whole
-    diagnosis. Connection and login failures are not in this class and stay unquoted.
+    Data, integrity and syntax errors name the table or column at fault, which is the whole
+    diagnosis: `Invalid column name 'VatType'` ends an investigation that `ProgrammingError` only
+    starts. Connection and login failures are not in these classes and stay unquoted, because
+    those are the messages that quote the connection string back.
     """
     state = ""
     arguments = getattr(error, "args", ())
     if arguments and isinstance(arguments[0], str) and re.fullmatch(r"[0-9A-Za-z]{5}", arguments[0]):
         state = arguments[0]
-    if not state.startswith(("22", "23")):
+    if not state.startswith(("22", "23", "42")):
         return type(error).__name__
     message = " ".join(str(part) for part in arguments[1:]) or str(error)
     message = _VALUE_TAIL.sub("truncated value hidden", message)

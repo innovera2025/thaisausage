@@ -58,6 +58,10 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("เขียนแล้ว:", out)
+    print("\nตรวจก่อนใช้งาน: คำสั่ง SQL ที่เขียนใหม่ยังไม่เคยรันกับฐานจริง")
+    print("   docker compose -f deploy/docker-compose.yml exec -T thaisausage \\")
+    print("       python -m thaisausage.preflight --config /app/config/local.json")
+    print("   ถ้าล้ม อย่า restart ทับ — ย้อนไฟล์สำรองก่อน แล้วค่อยแก้")
     print("header %d คอลัมน์ · detail %d คอลัมน์ · เขียน DO อัตโนมัติ: %s"
           % (len(config["do_write"]["header_columns"]), len(config["do_write"]["detail_columns"]),
              "เปิด" if config["do_write"]["enabled"] else "ปิด"))

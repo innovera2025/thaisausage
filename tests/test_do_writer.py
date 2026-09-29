@@ -98,6 +98,17 @@ class DriverComplaintTests(unittest.TestCase):
         message = self.complaint("23000", "connection UID=sa;PWD=secret failed a constraint")
         self.assertNotIn("secret", message)
 
+    def test_an_unknown_column_is_named(self):
+        """`Invalid column name` ends an investigation that `ProgrammingError` only starts."""
+        message = self.complaint("42S22", "[42S22] [Microsoft][ODBC Driver 18 for SQL Server]"
+                                 "[SQL Server]Invalid column name 'VatType'. (207)")
+        self.assertIn("42S22", message)
+        self.assertIn("VatType", message)
+
+    def test_an_unknown_table_is_named(self):
+        self.assertIn("tbl_Missing",
+                      self.complaint("42S02", "Invalid object name 'dbo.tbl_Missing'."))
+
     def test_anything_that_is_not_a_data_or_integrity_error_stays_a_class_name(self):
         self.assertEqual(self.complaint("28000", "[28000] Login failed for user 'sa'."), "DataError")
         self.assertEqual(self.complaint("08001", "server not found at 10.0.0.1"), "DataError")

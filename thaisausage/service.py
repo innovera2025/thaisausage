@@ -492,8 +492,9 @@ class IntegrationService:
             orders = sqlserver.fetch_approved_orders()
         except Exception as error:
             # The batch cannot be attributed to individual SOs, so it stops with a known state.
-            reason = type(error).__name__
-            logger.warning("scheduled sweep could not read the approved-SO query: %s", reason)
+            # A broken query repeats this every cycle, so it says which column or object is wrong.
+            reason = statement_error(error)
+            logger.error("scheduled sweep could not read the approved-SO query: %s", reason)
             return [{"order_no": None, "state": "review", "reason": reason}]
         results = []
         sent_this_cycle = 0
