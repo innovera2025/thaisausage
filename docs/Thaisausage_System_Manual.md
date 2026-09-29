@@ -282,6 +282,7 @@ DO ที่รับเข้ามาจะถูกเก็บลง staging
 | `disabled` | `do_write.enabled=false` | `false` |
 | `skipped` | ไม่มีใครออกเลข `TransactionNo` ได้ — payload ไม่ส่งมา และ writer ไม่ได้ตั้งให้จัดสรรเอง | `false` |
 | `rejected` | mapping/ข้อมูลไม่ผ่าน validate ไม่มี SQL ถูกส่ง | `false` |
+| `failed` | SQL Server ปฏิเสธค่า (เช่นข้อความยาวเกินคอลัมน์) ก่อน commit และ rollback แล้ว — `reason` บอกตารางและคอลัมน์ | `false` |
 | `conflict` | `do_no` หรือ `transaction_no` ถูกใช้โดย receipt อื่น | `false` |
 | `needs_review` | ผลไม่แน่นอน เช่น timeout ระหว่าง commit | `false` |
 
@@ -441,8 +442,12 @@ docker compose -f deploy/docker-compose.yml exec thaisausage python -c "import j
 | `disabled` | flag ปิดอยู่ | ได้ |
 | `rejected` | validate ไม่ผ่าน ไม่มี SQL ถูกส่ง | ได้ (หลังแก้สาเหตุ) |
 | `rehearsed` | รัน INSERT จริงแล้ว rollback — พิสูจน์สิทธิ์และ mapping โดยไม่ทิ้งข้อมูล | ได้ |
+| `failed` | SQL Server ปฏิเสธก่อน commit และ rollback แล้ว ไม่มีอะไรค้างใน ERP | ได้ (หลังแก้สาเหตุ) |
 | `inserted` | commit สำเร็จ | ไม่ได้ |
 | `needs_review` | ผลไม่แน่นอน เช่น timeout ระหว่าง commit | ไม่ได้ ต้องตรวจ ERP ด้วยมือก่อน |
+
+เส้นแบ่งอยู่ที่ commit: อะไรที่ล้มก่อน commit ฐานข้อมูล rollback ให้แล้ว จึงลองใหม่ได้ปลอดภัย
+ส่วน `needs_review` คือไม่รู้ว่าข้อมูลเข้าไปหรือยัง การลองใหม่อาจได้เอกสารสองใบ
 
 ตาราง `do_updates` เก็บสถานะการแก้เอกสารแยกต่างหาก ใช้สถานะชุดเดียวกันโดยมี `updated` แทน `inserted`
 

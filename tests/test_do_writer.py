@@ -50,6 +50,27 @@ def inserts(connection):
 
 
 
+
+class RetryAfterRefusalTests(unittest.TestCase):
+    """A refusal before COMMIT left nothing behind; an unknown outcome after COMMIT did not."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path as _Path
+        from unittest.mock import Mock as _Mock
+        from thaisausage.service import IntegrationService
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.database = str(_Path(self.temp.name) / "retry.sqlite3")
+        self.service = IntegrationService(self.database, False, _Mock(), _Mock())
+
+    def test_a_database_refusal_can_be_written_again_once_it_is_fixed(self):
+        self.assertIn("failed", self.service.RETRYABLE_WRITE_STATES)
+
+    def test_an_unknown_outcome_after_commit_never_can(self):
+        self.assertNotIn("needs_review", self.service.RETRYABLE_WRITE_STATES)
+
+
 class DriverComplaintTests(unittest.TestCase):
     """A data error names the column that refused the value; a login failure says nothing."""
 

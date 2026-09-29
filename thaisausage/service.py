@@ -208,7 +208,10 @@ class IntegrationService:
             db.close()
 
     # A DO write that never reached ERP may be retried after the cause is fixed.
-    RETRYABLE_WRITE_STATES = ("preview", "disabled", "rejected", "rehearsed")
+    # `needs_review` is deliberately absent: it means the outcome after COMMIT is unknown, and a
+    # retry could write the document twice. `failed` is a refusal the database made before COMMIT,
+    # with the transaction rolled back, so trying again once the cause is fixed is safe.
+    RETRYABLE_WRITE_STATES = ("preview", "disabled", "rejected", "rehearsed", "failed")
 
     def write_do(self, receipt_id, writer, source="erp", transaction_no=None):
         """Write one staged DO into ERP behind the writer feature flag.
@@ -278,9 +281,10 @@ class IntegrationService:
         except ContractError as error:
             state, reason = "rejected", str(error)
         except Exception as error:
-            # A data or integrity complaint names the column that refused the value; that is the
-            # difference between a fixable report and a dead end.
-            state, reason = "needs_review", statement_error(error)
+            # The writer rolls back and re-raises when the failure happened before COMMIT, and
+            # raises DOWriteAmbiguous when it did not, so reaching here means nothing was written.
+            # A data or integrity complaint also names the column that refused the value.
+            state, reason = "failed", statement_error(error)
         # An allocated number is only known once the write ran; record it against the claim.
         transaction_no = detail.get("transaction_no") or transaction_no
         db = self.connect()
@@ -376,7 +380,7 @@ class IntegrationService:
         except ContractError as error:
             state, reason = "rejected", str(error)
         except Exception as error:
-            state, reason = "needs_review", statement_error(error)
+            state, reason = "failed", statement_error(error)
         db = self.connect()
         try:
             with db:
