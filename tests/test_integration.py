@@ -131,6 +131,19 @@ class IntegrationTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ContractError):
                 validate_orders(payload)
 
+    def test_gross_weight_travels_with_the_line(self):
+        """eVRP has no gw field yet; the value is carried so it flows the day they add one."""
+        self.payload["orders"][0]["items"][0]["gw"] = 12.5
+        checked = validate_orders(self.payload)["orders"][0]["items"][0]
+        self.assertEqual(checked["gw"], 12.5)
+
+    def test_gross_weight_is_checked_like_the_other_dimensions(self):
+        for value in (-1, "heavy"):
+            payload = copy.deepcopy(self.payload)
+            payload["orders"][0]["items"][0]["gw"] = value
+            with self.subTest(value=value), self.assertRaises(ContractError):
+                validate_orders(payload)
+
     def test_vendor_request_id_restrictions(self):
         for value in ("x" * 121, "id with space", "เลขที่", "id/path"):
             with self.subTest(value=value), self.assertRaises(ContractError):
