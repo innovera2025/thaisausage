@@ -114,6 +114,23 @@ class IntegrationTests(unittest.TestCase):
         del order["shipping_address"]
         validate_orders(self.payload)
 
+    def test_the_pass_through_fields_reach_the_payload(self):
+        """eVRP v1.2 stores company, comname and vat_type and returns them on the DO callback."""
+        order = self.payload["orders"][0]
+        order.update(company="TST", comname="ห้างหุ้นส่วนจำกัด ไทยซอสเทรดดิ้ง", vat_type=1)
+        checked = validate_orders(self.payload)["orders"][0]
+        self.assertEqual((checked["company"], checked["vat_type"]), ("TST", 1))
+
+    def test_the_pass_through_fields_are_optional(self):
+        validate_orders(self.payload)  # none of the three are present in the example payload
+
+    def test_vat_type_must_be_a_non_negative_integer(self):
+        for value in (-1, 1.5, "1", True):
+            payload = copy.deepcopy(self.payload)
+            payload["orders"][0]["vat_type"] = value
+            with self.subTest(value=value), self.assertRaises(ContractError):
+                validate_orders(payload)
+
     def test_vendor_request_id_restrictions(self):
         for value in ("x" * 121, "id with space", "เลขที่", "id/path"):
             with self.subTest(value=value), self.assertRaises(ContractError):

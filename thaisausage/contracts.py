@@ -51,6 +51,16 @@ def validate_orders(payload):
                 prefix + ".delivery_date must be null or YYYY-MM-DD")
         credit = order.get("payment_in_day")
         require(credit is None or (number(credit) and credit >= 0), prefix + ".payment_in_day must be null or >= 0")
+        # eVRP stores these three unchanged and hands them back on the DO callback, so they are
+        # how a delivery order knows which company it belongs to. VAT_TYPE_INVALID is one of
+        # eVRP's own rejections; catching it here saves a round trip for the whole batch.
+        vat_type = order.get("vat_type")
+        require(vat_type is None or (isinstance(vat_type, int) and not isinstance(vat_type, bool)
+                                     and vat_type >= 0),
+                prefix + ".vat_type must be null or a non-negative integer")
+        for key in ("company", "comname"):
+            value = order.get(key)
+            require(value is None or isinstance(value, str), prefix + "." + key + " must be null or text")
         customer = order.get("customer")
         require(isinstance(customer, dict), prefix + ".customer is required")
         for key in ("code",):

@@ -251,11 +251,11 @@ ERP บันทึก DO ลงสองตาราง ทีม Thai Sausage 
 | `RemarkS` | `remark_s` | eVRP ส่งมา |  |
 | `AttachPict` | `attach_pict` | eVRP ส่งมา |  |
 | `DocuNw` | — | ค่าคงที่ |  |
-| `VatType` | `vat_type` | eVRP ส่งมา |  |
+| `VatType` | `vat_type` | ส่งกลับค่าที่ได้รับมากับ SO |  |
 | `EntryBy` | `entry_by` | eVRP ส่งมา |  |
 | `EntryDate` | — | เวลาของ SQL Server |  |
-| `Company` | `company` | eVRP ส่งมา |  |
-| `Comname` | `comname` | eVRP ส่งมา |  |
+| `Company` | `company` | ส่งกลับค่าที่ได้รับมากับ SO |  |
+| `Comname` | `comname` | ส่งกลับค่าที่ได้รับมากับ SO |  |
 | `SalesPerson` | `sales_person` | eVRP ส่งมา |  |
 | `SalesName` | `sales_name` | eVRP ส่งมา |  |
 | `Promotion` | `promotion` | eVRP ส่งมา |  |
@@ -308,6 +308,23 @@ ERP บันทึก DO ลงสองตาราง ทีม Thai Sausage 
 
 ชื่อฟิลด์ใน JSON คือชื่อคอลัมน์ของ ERP แปลงเป็นตัวพิมพ์เล็กคั่นด้วย `_` จึงเทียบกลับได้ตรงตัว
 หากฟิลด์ใดระบบท่านไม่มีหรือใช้ชื่ออื่น แจ้งกลับมาได้ เราปรับที่ฝั่งเราโดยไม่ต้องแก้ระบบท่าน
+
+### 9.3 สามฟิลด์ที่ส่งไปกับ SO แล้วขอรับกลับ
+
+ตาม VRP API v1.2 §7 ระบบท่านเก็บสามฟิลด์นี้ไว้เฉยๆ (`neo_so.so_api_company`,
+`so_api_comname`, `so_api_vat_type`) โดยไม่กระทบ routing, VAT หรือ COD และระบุว่า
+*"reserved for a future DO callback"*
+
+ตั้งแต่ 29 กันยายน 2026 ระบบเราส่งสามฟิลด์นี้ไปกับทุก SO แล้ว
+
+| ส่งไปกับ SO | ขอรับกลับใน DO | ทำไมต้องรับกลับ |
+|---|---|---|
+| `company` | `header.company` | ERP มีหลายบริษัท ต้องรู้ว่า DO ใบนี้เป็นของบริษัทไหน |
+| `comname` | `header.comname` | ชื่อบริษัทที่ต้องบันทึกในเอกสาร |
+| `vat_type` | `header.vat_type` | ประเภทภาษีต่างกันตามบริษัท |
+
+ระบบเราไม่สามารถเดาค่าเหล่านี้จากฝั่ง DO ได้ เพราะ DO ไม่ได้บอกว่ามาจาก SO ของบริษัทใด
+**รบกวนส่งกลับมาตามที่ได้รับไป** ถ้าไม่ส่ง ระบบจะบันทึกเป็น `NULL` และเอกสารจะไม่ระบุบริษัท
 
 ## 10. แก้ไข DO ที่ส่งมาแล้ว
 
