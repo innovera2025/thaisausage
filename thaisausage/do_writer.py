@@ -21,6 +21,31 @@ _COLUMN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _BINDABLE = (str, int, float, bool, Decimal, date, datetime)
 
 
+_CREDENTIAL = re.compile(r"(?i)\b(UID|PWD|User\s*ID|Password)\s*=\s*[^;\]\s]*")
+# SQL Server appends the offending value to a truncation message; the column name is what an
+# operator needs, the value is business data that does not belong in a log.
+_VALUE_TAIL = re.compile(r"(?i)\btruncated value\b.*", re.S)
+
+
+def statement_error(error):
+    """A driver complaint an operator can act on, with nothing private left in it.
+
+    Data and integrity errors name the table and column that refused the value, which is the whole
+    diagnosis. Connection and login failures are not in this class and stay unquoted.
+    """
+    state = ""
+    arguments = getattr(error, "args", ())
+    if arguments and isinstance(arguments[0], str) and re.fullmatch(r"[0-9A-Za-z]{5}", arguments[0]):
+        state = arguments[0]
+    if not state.startswith(("22", "23")):
+        return type(error).__name__
+    message = " ".join(str(part) for part in arguments[1:]) or str(error)
+    message = _VALUE_TAIL.sub("truncated value hidden", message)
+    message = _CREDENTIAL.sub(r"\1=***", message)
+    message = re.sub(r"\[Microsoft\]\[[^\]]*\]\[SQL Server\]", "", message)
+    return ("%s %s: %s" % (type(error).__name__, state, message.strip()))[:400]
+
+
 class DOWriteDisabled(Exception):
     """Raised when a write is attempted while the feature flag is off."""
 

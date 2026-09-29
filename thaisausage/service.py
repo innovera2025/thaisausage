@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from .connectors import RemoteError
 from .contracts import ContractError, require, text, validate_orders
-from .do_writer import DOWriteAmbiguous, DOWriteDisabled
+from .do_writer import DOWriteAmbiguous, DOWriteDisabled, statement_error
 
 
 logger = logging.getLogger(__name__)
@@ -278,7 +278,9 @@ class IntegrationService:
         except ContractError as error:
             state, reason = "rejected", str(error)
         except Exception as error:
-            state, reason = "needs_review", type(error).__name__
+            # A data or integrity complaint names the column that refused the value; that is the
+            # difference between a fixable report and a dead end.
+            state, reason = "needs_review", statement_error(error)
         # An allocated number is only known once the write ran; record it against the claim.
         transaction_no = detail.get("transaction_no") or transaction_no
         db = self.connect()
@@ -374,7 +376,7 @@ class IntegrationService:
         except ContractError as error:
             state, reason = "rejected", str(error)
         except Exception as error:
-            state, reason = "needs_review", type(error).__name__
+            state, reason = "needs_review", statement_error(error)
         db = self.connect()
         try:
             with db:

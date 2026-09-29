@@ -49,6 +49,40 @@ def inserts(connection):
     return [entry for entry in connection.executed if entry[0].startswith("INSERT")]
 
 
+
+class DriverComplaintTests(unittest.TestCase):
+    """A data error names the column that refused the value; a login failure says nothing."""
+
+    def complaint(self, *args):
+        from thaisausage.do_writer import statement_error
+
+        class DataError(Exception):
+            pass
+        return statement_error(DataError(*args))
+
+    def test_the_table_and_column_survive(self):
+        message = self.complaint("22001", "[22001] [Microsoft][ODBC Driver 18][SQL Server]String or "
+                                 "binary data would be truncated in table 'dbo.tbl_DOhdr', column 'CarNumber'.")
+        self.assertIn("22001", message)
+        self.assertIn("tbl_DOhdr", message)
+        self.assertIn("CarNumber", message)
+
+    def test_the_offending_value_does_not(self):
+        message = self.complaint("22001", "String or binary data would be truncated in table "
+                                 "'dbo.tbl_DOhdr', column 'Driver'. Truncated value: 'นายธีรวัฒน์ หอมทอง'.")
+        self.assertIn("Driver", message)
+        self.assertNotIn("นายธีรวัฒน์", message)
+
+    def test_a_credential_is_never_quoted_back(self):
+        message = self.complaint("23000", "connection UID=sa;PWD=secret failed a constraint")
+        self.assertNotIn("secret", message)
+
+    def test_anything_that_is_not_a_data_or_integrity_error_stays_a_class_name(self):
+        self.assertEqual(self.complaint("28000", "[28000] Login failed for user 'sa'."), "DataError")
+        self.assertEqual(self.complaint("08001", "server not found at 10.0.0.1"), "DataError")
+        self.assertEqual(self.complaint("timeout"), "DataError")
+
+
 class DefaultValueTests(unittest.TestCase):
     """Columns the ERP application needs filled, which eVRP has no opinion about."""
 
