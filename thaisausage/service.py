@@ -477,11 +477,16 @@ class IntegrationService:
                 logger.warning("hook sweep review event_id=%s reason=%s", safe_identifier(event_id), reason)
         return results
 
-    def sweep_approved_orders(self, sqlserver):
+    def sweep_approved_orders(self, sqlserver, max_new_orders=None):
         """Read the configured approved-SO query and submit each new order.
 
         Each order is isolated: one unmappable or conflicting SO must not stop the
         rest of the approved batch from reaching eVRP in this cycle.
+
+        `max_new_orders` caps how many orders are sent outward in one cycle. Orders already
+        accounted for do not count against it, so a backlog drains over several cycles instead of
+        arriving at eVRP as one burst — which matters when widening the scope of the query, where
+        the first cycle would otherwise carry every order that was never sent before.
         """
         try:
             orders = sqlserver.fetch_approved_orders()
@@ -491,7 +496,12 @@ class IntegrationService:
             logger.warning("scheduled sweep could not read the approved-SO query: %s", reason)
             return [{"order_no": None, "state": "review", "reason": reason}]
         results = []
+        sent_this_cycle = 0
         for order in orders:
+            if max_new_orders is not None and sent_this_cycle >= max_new_orders:
+                results.append({"order_no": None, "state": "deferred",
+                                "reason": "max_new_orders_reached"})
+                break
             order_no = order.get("order_no") if isinstance(order, dict) else None
             if not isinstance(order_no, str) or not order_no.strip():
                 results.append({"order_no": None, "state": "review", "reason": "order_no_missing"})
@@ -526,6 +536,7 @@ class IntegrationService:
                                         "reason": "already_sent" if prior == "sent" else "already_claimed"})
                     continue
                 result = self.submit({"request_id": request_id, "orders": [order]})
+                sent_this_cycle += 1
                 if self.dry_run:
                     results.append({"order_no": order_no, "state": "preview", "reason": "dry_run_preview"})
                 else:

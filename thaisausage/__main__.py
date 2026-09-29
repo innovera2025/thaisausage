@@ -21,7 +21,8 @@ def run_sweep_cycle(config, service, sqlserver):
     """
     if not config.get("sync", {}).get("enabled", False):
         return None
-    results = service.sweep_approved_orders(sqlserver)
+    results = service.sweep_approved_orders(
+        sqlserver, config.get("sync", {}).get("max_new_orders_per_cycle"))
     summary = {}
     for result in results:
         summary[result["state"]] = summary.get(result["state"], 0) + 1

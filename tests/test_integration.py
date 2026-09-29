@@ -199,6 +199,37 @@ class IntegrationTests(unittest.TestCase):
         with sqlite3.connect(self.database) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM do_receipts").fetchone()[0], 1)
 
+    def test_a_backlog_is_drained_over_several_cycles(self):
+        """Widening the query must not deliver every order never sent before in one burst."""
+        orders = []
+        for index in range(7):
+            order = copy.deepcopy(self.payload["orders"][0])
+            order["order_no"] = "SO-BACKLOG-%d" % index
+            orders.append(order)
+        sqlserver = Mock()
+        sqlserver.fetch_approved_orders.return_value = orders
+
+        first = self.service.sweep_approved_orders(sqlserver, max_new_orders=3)
+        self.assertEqual(self.vrp.send.call_count, 3)
+        self.assertEqual(first[-1]["reason"], "max_new_orders_reached")
+
+        self.service.sweep_approved_orders(sqlserver, max_new_orders=3)
+        self.assertEqual(self.vrp.send.call_count, 6)  # the three already sent do not count again
+        self.service.sweep_approved_orders(sqlserver, max_new_orders=3)
+        self.assertEqual(self.vrp.send.call_count, 7)
+
+    def test_without_a_cap_every_order_still_goes(self):
+        orders = []
+        for index in range(4):
+            order = copy.deepcopy(self.payload["orders"][0])
+            order["order_no"] = "SO-UNCAPPED-%d" % index
+            orders.append(order)
+        sqlserver = Mock()
+        sqlserver.fetch_approved_orders.return_value = orders
+        results = self.service.sweep_approved_orders(sqlserver)
+        self.assertEqual(self.vrp.send.call_count, 4)
+        self.assertNotIn("deferred", [result["state"] for result in results])
+
     def test_hook_sweep_reads_then_uses_single_submission_pipeline(self):
         self.service.record_erp_hook({"event_id": "E-SWEEP", "event_type": "sales_order.ready",
                                       "source_id": "main-erp", "order_no": "SO-1"})
