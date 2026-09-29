@@ -255,11 +255,14 @@ ERP_HEADER_COLUMNS = [
     "SalesName", "Promotion", "Stock", "Scarp", "Paymentinday", "Time", "Market", "TotalAmount",
     "Discount", "DiscountAmount", "TotalDiscountAmount", "AdvancePay", "VAT", "VATAmount",
     "TotalActualAmount", "LocationCode", "LocationName", "Driver", "RemarkCode"]
+# LotNo is the one column here that the ERP team's INSERT script did not list. The column exists
+# on the table, and the lot is only known once the warehouse picks the goods, so it can reach ERP
+# through the delivery order or not at all. Writing it still needs the ERP team's word.
 ERP_DETAIL_COLUMNS = [
-    "TransactionNo", "Slno", "Itemcode", "Description", "ItemModel", "PartNoCust", "PartNameCust",
-    "DescCust", "SoNo", "SOtrNo", "SOline", "SOstock", "PoCust", "DeliveryDueDate", "Qty", "Nw",
-    "TotalNw", "Saleprice", "Units", "IncludeVat", "Warehouse", "DiscountPercent", "DiscountAmount",
-    "Amount"]
+    "TransactionNo", "Slno", "Itemcode", "Description", "LotNo", "ItemModel", "PartNoCust",
+    "PartNameCust", "DescCust", "SoNo", "SOtrNo", "SOline", "SOstock", "PoCust", "DeliveryDueDate",
+    "Qty", "Nw", "TotalNw", "Saleprice", "Units", "IncludeVat", "Warehouse", "DiscountPercent",
+    "DiscountAmount", "Amount"]
 
 
 class ErpContractShapeTests(unittest.TestCase):

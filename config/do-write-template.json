@@ -254,6 +254,10 @@
         "source": "payload",
         "path": "description"
       },
+      "LotNo": {
+        "source": "payload",
+        "path": "lot_no"
+      },
       "ItemModel": {
         "source": "payload",
         "path": "item_model"
