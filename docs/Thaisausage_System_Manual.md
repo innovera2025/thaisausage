@@ -510,6 +510,10 @@ docker compose -f deploy/docker-compose.yml exec thaisausage python -c "import j
 | `disabled` | flag ปิดอยู่ | ได้ |
 | `rejected` | validate ไม่ผ่าน ไม่มี SQL ถูกส่ง | ได้ (หลังแก้สาเหตุ) |
 | `rehearsed` | รัน INSERT จริงแล้ว rollback — พิสูจน์สิทธิ์และ mapping โดยไม่ทิ้งข้อมูล | ได้ |
+
+`transaction_no` จะถูกบันทึกไว้เฉพาะเมื่อ commit สำเร็จเท่านั้น สถานะอื่นเก็บเป็น `NULL` เพราะเลขที่
+ซ้อมแล้ว rollback ยังว่างอยู่ ถ้าบันทึกไว้ ใบถัดไปที่จองเลขเดิมจะชนกับแถวนี้แทนที่จะเขียนได้
+
 | `failed` | SQL Server ปฏิเสธก่อน commit และ rollback แล้ว ไม่มีอะไรค้างใน ERP | ได้ (หลังแก้สาเหตุ) |
 | `inserted` | commit สำเร็จ | ไม่ได้ |
 | `needs_review` | ผลไม่แน่นอน เช่น timeout ระหว่าง commit | ไม่ได้ ต้องตรวจ ERP ด้วยมือก่อน |

@@ -50,7 +50,7 @@ class FakeConnection:
         connection = self
 
         class Cursor:
-            def execute(self, sql, parameters):
+            def execute(self, sql, parameters=None):
                 connection.executed.append((sql, parameters))
 
             def fetchone(self):
@@ -93,6 +93,22 @@ class RehearsalTests(unittest.TestCase):
         result = self.service.write_do("DO-1", self.writer(rollback_only=True),
                                        source="eVRP", transaction_no="900001")
         self.assertEqual((result["state"], result["reason"]), ("rehearsed", "rollback_only"))
+
+    def test_two_rehearsals_do_not_collide_on_the_number_neither_of_them_used(self):
+        """A rehearsal rolls back, so its number stays free and the next one takes it too."""
+        self.service.receive_do({"receipt_id": "DO-2", "do_no": "DO-2",
+                                 "header": {"do_no": "DO-2"},
+                                 "details": [{"item_code": "I-2"}]}, "eVRP")
+        writer = DOWriter({**CONFIG, "transaction_no_source": "auto", "rollback_only": True},
+                          connect=lambda config: self.connection)
+        first = self.service.write_do("DO-1", writer, source="eVRP")
+        second = self.service.write_do("DO-2", writer, source="eVRP")
+        self.assertEqual(first["state"], "rehearsed")
+        self.assertEqual(second["state"], "rehearsed")
+        self.assertEqual(first["transaction_no"], second["transaction_no"])  # the same free number
+        with sqlite3.connect(self.database) as db:
+            stored = db.execute("SELECT transaction_no FROM do_writes ORDER BY receipt_key").fetchall()
+        self.assertEqual(stored, [(None,), (None,)])  # nothing claimed, because nothing was written
 
     def test_a_rehearsed_document_can_still_be_written_for_real(self):
         self.service.write_do("DO-1", self.writer(rollback_only=True),

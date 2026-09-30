@@ -285,8 +285,12 @@ class IntegrationService:
             # raises DOWriteAmbiguous when it did not, so reaching here means nothing was written.
             # A data or integrity complaint also names the column that refused the value.
             state, reason = "failed", statement_error(error)
-        # An allocated number is only known once the write ran; record it against the claim.
-        transaction_no = detail.get("transaction_no") or transaction_no
+        # An allocated number is only known once the write ran.
+        allocated = detail.get("transaction_no") or transaction_no
+        # Only a committed write puts a number into ERP. Recording one for a rehearsal, a preview
+        # or a refusal claims a number nothing is using, and the next attempt — which allocates
+        # the same still-free number — collides with this row instead of writing.
+        transaction_no = allocated if detail.get("committed") else None
         db = self.connect()
         try:
             with db:
@@ -299,7 +303,7 @@ class IntegrationService:
             logger.warning("do write receipt=%s state=%s reason=%s", safe_identifier(key), state, reason)
         return {"receipt_id": receipt_id, "receipt_key": key, "source": source,
                 "state": state, "reason": reason,
-                "transaction_no": transaction_no, **detail}
+                "transaction_no": allocated, **detail}
 
     def written_document(self, do_no):
         """The ERP number a delivery order was written under, if it was written at all.
