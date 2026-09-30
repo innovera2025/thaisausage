@@ -247,7 +247,7 @@ ERP บันทึก DO ลงสองตาราง ทีม Thai Sausage 
 | `CustName` | `cust_name` | eVRP ส่งมา |  |
 | `BillingAddress` | `billing_address` | eVRP ส่งมา |  |
 | `ShippingAddress` | `shipping_address` | eVRP ส่งมา |  |
-| `DlvCode` | `dlv_code` | eVRP ส่งมา |  |
+| `DlvCode` | — | **ไม่ต้องส่ง** — คอลัมน์กว้าง 10 ตัวอักษร รับรหัสลูกค้า 14 ตัวไม่ได้ รอทีม ERP ยืนยันว่าควรใส่อะไร |  |
 | `RemarkS` | `remark_s` | eVRP ส่งมา |  |
 | `AttachPict` | `attach_pict` | eVRP ส่งมา |  |
 | `DocuNw` | — | ค่าคงที่ |  |

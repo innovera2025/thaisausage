@@ -260,7 +260,7 @@ ERP_HEADER_COLUMNS = [
 # through the delivery order or not at all. Writing it still needs the ERP team's word.
 ERP_DETAIL_COLUMNS = [
     "TransactionNo", "Slno", "Itemcode", "Description", "LotNo", "ItemModel", "PartNoCust",
-    "PartNameCust", "DescCust", "SoNo", "SOtrNo", "SOline", "SOstock", "PoCust", "DeliveryDueDate",
+    "PartNameCust", "DescCust", "SoNo", "SOTrNo", "SOline", "SOstock", "PoCust", "DeliveryDueDate",
     "Qty", "Nw", "TotalNw", "Saleprice", "Units", "IncludeVat", "Warehouse", "DiscountPercent",
     "DiscountAmount", "Amount"]
 

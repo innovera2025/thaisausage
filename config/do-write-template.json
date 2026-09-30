@@ -123,8 +123,9 @@
         "path": "shipping_address"
       },
       "DlvCode": {
-        "source": "payload",
-        "path": "dlv_code"
+        "source": "fixed",
+        "value": null,
+        "note": "nchar(10); eVRP's dlv_code is a 14-character customer code — waiting on the ERP team"
       },
       "RemarkS": {
         "source": "payload",
@@ -278,7 +279,7 @@
         "source": "payload",
         "path": "so_no"
       },
-      "SOtrNo": {
+      "SOTrNo": {
         "source": "payload",
         "path": "s_otr_no"
       },

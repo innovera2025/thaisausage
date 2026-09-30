@@ -31,7 +31,9 @@ def column_shapes(connector, connection, table):
         "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE "
         "FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
         (schema.strip("[]"), name.strip("[]")))
-    return {row["COLUMN_NAME"]: row for row in rows}
+    # SQL Server matches identifiers without regard to case, so this has to as well; otherwise a
+    # column spelled SOtrNo in the mapping looks missing next to SOTrNo in the table.
+    return {row["COLUMN_NAME"].lower(): row for row in rows}
 
 
 def measured(value):
@@ -55,7 +57,7 @@ def digits(value):
 def problems(mapping, shapes, payload, transaction_no, line_no, table):
     found = []
     for column, spec in mapping.items():
-        shape = shapes.get(column)
+        shape = shapes.get(column.lower())
         if shape is None:
             found.append((column, "ไม่มีคอลัมน์นี้ในตาราง %s" % table, None))
             continue

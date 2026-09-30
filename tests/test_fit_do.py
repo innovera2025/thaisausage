@@ -16,16 +16,18 @@ HEADER = {"DoNo": {"source": "payload", "path": "do_no"},
           "TransactionNo": {"source": "transaction_no"},
           "EntryDate": {"source": "server_time"}}
 
+# Keyed the way column_shapes returns them: lower case, because SQL Server does not care about
+# case and the mapping and the table do not always agree on it.
 SHAPES = {
-    "DoNo": {"COLUMN_NAME": "DoNo", "DATA_TYPE": "varchar", "CHARACTER_MAXIMUM_LENGTH": 20,
+    "dono": {"COLUMN_NAME": "DoNo", "DATA_TYPE": "varchar", "CHARACTER_MAXIMUM_LENGTH": 20,
              "NUMERIC_PRECISION": None, "NUMERIC_SCALE": None},
-    "CustName": {"COLUMN_NAME": "CustName", "DATA_TYPE": "nvarchar", "CHARACTER_MAXIMUM_LENGTH": 30,
+    "custname": {"COLUMN_NAME": "CustName", "DATA_TYPE": "nvarchar", "CHARACTER_MAXIMUM_LENGTH": 30,
                  "NUMERIC_PRECISION": None, "NUMERIC_SCALE": None},
-    "TotalAmount": {"COLUMN_NAME": "TotalAmount", "DATA_TYPE": "decimal",
+    "totalamount": {"COLUMN_NAME": "TotalAmount", "DATA_TYPE": "decimal",
                     "CHARACTER_MAXIMUM_LENGTH": None, "NUMERIC_PRECISION": 8, "NUMERIC_SCALE": 2},
-    "TransactionNo": {"COLUMN_NAME": "TransactionNo", "DATA_TYPE": "int",
+    "transactionno": {"COLUMN_NAME": "TransactionNo", "DATA_TYPE": "int",
                       "CHARACTER_MAXIMUM_LENGTH": None, "NUMERIC_PRECISION": 10, "NUMERIC_SCALE": 0},
-    "EntryDate": {"COLUMN_NAME": "EntryDate", "DATA_TYPE": "datetime",
+    "entrydate": {"COLUMN_NAME": "EntryDate", "DATA_TYPE": "datetime",
                   "CHARACTER_MAXIMUM_LENGTH": None, "NUMERIC_PRECISION": None, "NUMERIC_SCALE": None},
 }
 
@@ -56,13 +58,21 @@ class FitTests(unittest.TestCase):
         self.assertEqual(check({"do_no": "DO-1", "total_amount": 99804.8}), [])
 
     def test_a_column_the_table_does_not_have_is_reported(self):
-        shapes = {name: shape for name, shape in SHAPES.items() if name != "CustName"}
+        shapes = {name: shape for name, shape in SHAPES.items() if name != "custname"}
         found = check({"do_no": "DO-1", "cust_name": "x"}, shapes)
         self.assertEqual(found[0][0], "CustName")
         self.assertIn("ไม่มีคอลัมน์", found[0][1])
 
     def test_the_server_clock_is_not_measured(self):
         self.assertEqual(check({"do_no": "DO-1"}), [])
+
+    def test_a_column_spelled_with_different_case_still_matches(self):
+        """The table says SOTrNo and the mapping says SOtrNo; SQL Server treats them as one."""
+        mapping = {"SOtrNo": {"source": "payload", "path": "so_tr_no"}}
+        shapes = {"sotrno": {"COLUMN_NAME": "SOTrNo", "DATA_TYPE": "numeric",
+                             "CHARACTER_MAXIMUM_LENGTH": None,
+                             "NUMERIC_PRECISION": 18, "NUMERIC_SCALE": 0}}
+        self.assertEqual(problems(mapping, shapes, {"so_tr_no": 12}, 900000, None, "dbo.tbl_Dodtl"), [])
 
 
 class MeasureTests(unittest.TestCase):
