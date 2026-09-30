@@ -17,7 +17,9 @@ from datetime import datetime, timedelta, timezone
 from .config import load_config
 
 # Anything in this list means a human has to look; everything else is the system working.
-NEEDS_ATTENTION = ("failed", "needs_review", "conflict", "rejected", "error")
+# `pending` is a claim that never got its result written — the process stopped in between — so
+# whether ERP holds the document is unknown until somebody checks.
+NEEDS_ATTENTION = ("failed", "needs_review", "conflict", "rejected", "error", "pending")
 
 
 def rows(db, sql, parameters=()):

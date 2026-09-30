@@ -517,6 +517,11 @@ docker compose -f deploy/docker-compose.yml exec thaisausage python -c "import j
 | `failed` | SQL Server ปฏิเสธก่อน commit และ rollback แล้ว ไม่มีอะไรค้างใน ERP | ได้ (หลังแก้สาเหตุ) |
 | `inserted` | commit สำเร็จ | ไม่ได้ |
 | `needs_review` | ผลไม่แน่นอน เช่น timeout ระหว่าง commit | ไม่ได้ ต้องตรวจ ERP ด้วยมือก่อน |
+| `pending` | จองแล้วแต่ไม่เคยบันทึกผล — โปรเซสหยุดกลางคัน | ไม่ได้ ต้องตรวจ ERP ก่อนปลด |
+
+การปลด `pending` หรือ `needs_review`: ตรวจก่อนว่าเอกสารอยู่ใน ERP หรือไม่ ด้วย
+`SELECT COUNT(*) FROM dbo.tbl_DOhdr WHERE DoNo = '<เลขที่ DO>'` ถ้าไม่มี จึงเปลี่ยนสถานะเป็น
+`failed` เพื่อให้เขียนใหม่ได้ ถ้ามีอยู่แล้วให้เปลี่ยนเป็น `inserted` พร้อมใส่ `transaction_no` ที่พบ
 
 เส้นแบ่งอยู่ที่ commit: อะไรที่ล้มก่อน commit ฐานข้อมูล rollback ให้แล้ว จึงลองใหม่ได้ปลอดภัย
 ส่วน `needs_review` คือไม่รู้ว่าข้อมูลเข้าไปหรือยัง การลองใหม่อาจได้เอกสารสองใบ
