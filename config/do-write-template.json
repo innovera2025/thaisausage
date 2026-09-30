@@ -256,7 +256,7 @@
       },
       "LotNo": {
         "source": "payload",
-        "path": "lot_no"
+        "path": "lotno"
       },
       "ItemModel": {
         "source": "payload",
